@@ -1,4 +1,4 @@
-*.class
+#*.class
 
 # Mobile Tools for Java (J2ME)
 .mtj.tmp/
@@ -23,7 +23,7 @@ Minebot/minebot
 Minebot/options.txt
 Minebot/saves
 Minebot/screenshots
-Minecraft/
+#Minecraft/
 
-!gradle-wrapper.jar
+#!gradle-wrapper.jar
 
