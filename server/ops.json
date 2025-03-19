@@ -1,0 +1,20 @@
+[
+  {
+    "uuid": "51a4b33d-8b80-3bde-806f-de4086b03058",
+    "name": "Bot1",
+    "level": 4,
+    "bypassesPlayerLimit": false
+  },
+  {
+    "uuid": "f94ade50-1237-4648-b042-3fc0b66cac0a",
+    "name": "Xylim",
+    "level": 4,
+    "bypassesPlayerLimit": false
+  },
+  {
+    "uuid": "e86911bc-b894-33f8-9a22-f4b2ef3a1865",
+    "name": "Xylim",
+    "level": 4,
+    "bypassesPlayerLimit": false
+  }
+]

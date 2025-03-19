@@ -1,0 +1,138 @@
+---- Minecraft Crash Report ----
+// Ouch. That hurt :(
+
+Time: 3/17/25, 4:41 PM
+Description: Watching Server
+
+java.lang.Error
+	at app//net.minecraft.server.MinecraftServer.A(SourceFile:539)
+	at app//net.minecraft.server.MinecraftServer.run(SourceFile:451)
+	at java.base@17.0.2/java.lang.Thread.run(Thread.java:833)
+
+
+A detailed walkthrough of the error, its code path and all known details is as follows:
+---------------------------------------------------------------------------------------
+
+-- Head --
+Stacktrace:
+	at app//net.minecraft.server.MinecraftServer.A(SourceFile:539)
+
+-- Thread Dump --
+Details:
+	Threads: "Reference Handler" daemon prio=10 Id=2 RUNNABLE
+	at java.base@17.0.2/java.lang.ref.Reference.waitForReferencePendingList(Native Method)
+	at java.base@17.0.2/java.lang.ref.Reference.processPendingReferences(Reference.java:253)
+	at java.base@17.0.2/java.lang.ref.Reference$ReferenceHandler.run(Reference.java:215)
+
+
+"Finalizer" daemon prio=8 Id=3 WAITING on java.lang.ref.ReferenceQueue$Lock@38e8ac48
+	at java.base@17.0.2/java.lang.Object.wait(Native Method)
+	-  waiting on java.lang.ref.ReferenceQueue$Lock@38e8ac48
+	at java.base@17.0.2/java.lang.ref.ReferenceQueue.remove(ReferenceQueue.java:155)
+	at java.base@17.0.2/java.lang.ref.ReferenceQueue.remove(ReferenceQueue.java:176)
+	at java.base@17.0.2/java.lang.ref.Finalizer$FinalizerThread.run(Finalizer.java:172)
+
+
+"Signal Dispatcher" daemon prio=9 Id=4 RUNNABLE
+
+
+"Notification Thread" daemon prio=9 Id=12 RUNNABLE
+
+
+"Common-Cleaner" daemon prio=8 Id=13 TIMED_WAITING on java.lang.ref.ReferenceQueue$Lock@362f5525
+	at java.base@17.0.2/java.lang.Object.wait(Native Method)
+	-  waiting on java.lang.ref.ReferenceQueue$Lock@362f5525
+	at java.base@17.0.2/java.lang.ref.ReferenceQueue.remove(ReferenceQueue.java:155)
+	at java.base@17.0.2/jdk.internal.ref.CleanerImpl.run(CleanerImpl.java:140)
+	at java.base@17.0.2/java.lang.Thread.run(Thread.java:833)
+	at java.base@17.0.2/jdk.internal.misc.InnocuousThread.run(InnocuousThread.java:162)
+
+
+"Snooper Timer" daemon prio=5 Id=16 TIMED_WAITING on java.util.TaskQueue@3210c738
+	at java.base@17.0.2/java.lang.Object.wait(Native Method)
+	-  waiting on java.util.TaskQueue@3210c738
+	at java.base@17.0.2/java.util.TimerThread.mainLoop(Timer.java:563)
+	at java.base@17.0.2/java.util.TimerThread.run(Timer.java:516)
+
+
+"Server Infinisleeper" daemon prio=5 Id=17 TIMED_WAITING
+	at java.base@17.0.2/java.lang.Thread.sleep(Native Method)
+	at app//ko$1.run(SourceFile:65)
+
+
+"Server thread" prio=5 Id=18 RUNNABLE
+	at app//net.minecraft.server.MinecraftServer.A(SourceFile:539)
+	at app//net.minecraft.server.MinecraftServer.run(SourceFile:451)
+	at java.base@17.0.2/java.lang.Thread.run(Thread.java:833)
+
+
+"Server console handler" daemon prio=5 Id=20 RUNNABLE (in native)
+	at java.base@17.0.2/java.io.FileInputStream.readBytes(Native Method)
+	at java.base@17.0.2/java.io.FileInputStream.read(FileInputStream.java:276)
+	at java.base@17.0.2/java.io.BufferedInputStream.read1(BufferedInputStream.java:282)
+	at java.base@17.0.2/java.io.BufferedInputStream.read(BufferedInputStream.java:343)
+	-  locked java.io.BufferedInputStream@77125f1e
+	at java.base@17.0.2/sun.nio.cs.StreamDecoder.readBytes(StreamDecoder.java:270)
+	at java.base@17.0.2/sun.nio.cs.StreamDecoder.implRead(StreamDecoder.java:313)
+	at java.base@17.0.2/sun.nio.cs.StreamDecoder.read(StreamDecoder.java:188)
+	-  locked java.io.InputStreamReader@ae52758
+	at java.base@17.0.2/java.io.InputStreamReader.read(InputStreamReader.java:177)
+	...
+
+
+"DestroyJavaVM" prio=5 Id=21 RUNNABLE
+
+
+"Netty Epoll Server IO #0" daemon prio=5 Id=24 RUNNABLE (in native)
+	at app//io.netty.channel.epoll.Native.epollWait(Native Method)
+	at app//io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at app//io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at app//io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.base@17.0.2/java.lang.Thread.run(Thread.java:833)
+
+
+"Server Watchdog" daemon prio=5 Id=49 RUNNABLE
+	at java.management@17.0.2/sun.management.ThreadImpl.dumpThreads0(Native Method)
+	at java.management@17.0.2/sun.management.ThreadImpl.dumpAllThreads(ThreadImpl.java:521)
+	at java.management@17.0.2/sun.management.ThreadImpl.dumpAllThreads(ThreadImpl.java:509)
+	at app//kp.run(SourceFile:43)
+	at java.base@17.0.2/java.lang.Thread.run(Thread.java:833)
+
+
+"File IO Thread" prio=1 Id=50 TIMED_WAITING
+	at java.base@17.0.2/java.lang.Thread.sleep(Native Method)
+	at app//auc.c(SourceFile:51)
+	at app//auc.run(SourceFile:30)
+	at java.base@17.0.2/java.lang.Thread.run(Thread.java:833)
+
+
+"Netty Epoll Server IO #1" daemon prio=5 Id=25 RUNNABLE
+	at java.base@17.0.2/java.util.Formatter$FormatSpecifier.localizedMagnitude(Formatter.java:4545)
+	at java.base@17.0.2/java.util.Formatter$FormatSpecifier.localizedMagnitude(Formatter.java:4455)
+	at java.base@17.0.2/java.util.Formatter$FormatSpecifier.print(Formatter.java:4231)
+	at java.base@17.0.2/java.util.Formatter$FormatSpecifier.print(Formatter.java:4199)
+	at java.base@17.0.2/java.util.Formatter$FormatSpecifier.printDateTime(Formatter.java:3002)
+	at java.base@17.0.2/java.util.Formatter$FormatSpecifier.print(Formatter.java:2911)
+	at java.base@17.0.2/java.util.Formatter.format(Formatter.java:2695)
+	at java.base@17.0.2/java.util.Formatter.format(Formatter.java:2625)
+	...
+
+
+
+Stacktrace:
+	at kp.run(SourceFile:59)
+	at java.base/java.lang.Thread.run(Thread.java:833)
+
+-- System Details --
+Details:
+	Minecraft Version: 1.8.9
+	Operating System: Linux (amd64) version 5.15.167.4-microsoft-standard-WSL2
+	Java Version: 17.0.2, Oracle Corporation
+	Java VM Version: OpenJDK 64-Bit Server VM (mixed mode, sharing), Oracle Corporation
+	Memory: 1658585920 bytes (1581 MB) / 2147483648 bytes (2048 MB) up to 4294967296 bytes (4096 MB)
+	JVM Flags: 2 total; -Xmx4G -Xms2G
+	IntCache: cache: 0, tcache: 0, allocated: 12, tallocated: 94
+	Profiler Position: N/A (disabled)
+	Player Count: 0 / 20; []
+	Is Modded: Unknown (can't tell)
+	Type: Dedicated Server (map_server.txt)

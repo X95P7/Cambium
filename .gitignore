@@ -23,6 +23,8 @@ Minebot/minebot
 Minebot/options.txt
 Minebot/saves
 Minebot/screenshots
+*.log
+*.dll
 #Minecraft/
 
 #!gradle-wrapper.jar

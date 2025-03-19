@@ -1,0 +1,28 @@
+services:
+  mc-forge:
+    image: itzg/minecraft-server:java8
+    container_name: mc-forge
+    ports:
+      - "25565:25565"
+      - "25575:25575"  # RCON port for alternative method
+    environment:
+      EULA: "TRUE"
+      TYPE: "FORGE"
+      VERSION: "1.8.9"
+      MEMORY: "2G"
+      ENABLE_RCON: "TRUE"
+      RCON_PASSWORD: "minecraft"  # Change for security
+    volumes:
+      - ./server:/data
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=production
+    depends_on:
+      - mc-forge
+    volumes:
+      - /var/run/docker.sock:/v
