@@ -55,6 +55,13 @@ import net.famzangl.minecraft.minebot.ai.commands.CommandTunnel;
 import net.famzangl.minecraft.minebot.ai.commands.CommandUngrab;
 import net.famzangl.minecraft.minebot.ai.commands.CommandWalk;
 import net.famzangl.minecraft.minebot.ai.commands.CommandXPFarm;
+import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandCrash;
+import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandHotbar;
+import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandLeftClick;
+import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandMovement;
+import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandRightClick;
+import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandSwapInventory;
+import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandTest;
 import net.famzangl.minecraft.minebot.ai.scripting.CommandJs;
 import net.famzangl.minecraft.minebot.build.commands.CommandBuild;
 import net.famzangl.minecraft.minebot.build.commands.CommandClearArea;
@@ -142,6 +149,15 @@ public class AIChatController {
 		registerCommand(CommandReverse.class);
 		registerCommand(CommandMove.class);
 		registerCommand(CommandCount.class);
+
+		registerCommand(CommandCrash.class);
+		registerCommand(CommandHotbar.class);
+		registerCommand(CommandLeftClick.class);
+		registerCommand(CommandMovement.class);
+		registerCommand(CommandRightClick.class);
+		registerCommand(CommandSwapInventory.class);
+		registerCommand(CommandTest.class);
+		
 	}
 
 	private AIChatController() {

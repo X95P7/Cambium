@@ -19,16 +19,22 @@ package net.famzangl.minecraft.minebot;
 import java.net.URISyntaxException;
 
 import net.famzangl.minecraft.minebot.ai.AIController;
+import net.famzangl.minecraft.minebot.ai.ChatListener;
 import net.famzangl.minecraft.minebot.ai.path.world.BlockBoundsCache;
+import net.famzangl.minecraft.minebot.ai.strategy.cambium.LeftClickStrategy;
+import net.minecraftforge.client.event.ClientChatReceivedEvent;
+import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.Mod.EventHandler;
 import net.minecraftforge.fml.common.Mod.Instance;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.config.Configuration;
+import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 
 @Mod(modid = "minebot-mod", name = "Minebot", version = "0.4")
 public class MinebotMod {
@@ -55,11 +61,13 @@ public class MinebotMod {
 	public void init(FMLInitializationEvent event) {
 		BlockBoundsCache.initialize();
 		FMLCommonHandler.instance().bus().register(new PlayerUpdateHandler());
-		final AIController controller = new AIController();
+		final AIController controller = AIController.getInstance();
 		controller.initialize();
+		MinecraftForge.EVENT_BUS.register(new ChatListener());
 	}
 
 	public static String getVersion() {
 		return MinebotMod.class.getAnnotation(Mod.class).version();
 	}
+
 }
