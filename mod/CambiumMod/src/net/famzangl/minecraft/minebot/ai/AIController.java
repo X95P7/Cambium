@@ -16,6 +16,7 @@
  *******************************************************************************/
 package net.famzangl.minecraft.minebot.ai;
 
+
 import java.util.ArrayList;
 import java.util.Hashtable;
 import java.util.Iterator;
@@ -170,6 +171,13 @@ public class AIController extends AIHelper implements IAIControllable {
      */
     @SubscribeEvent
     public void onPlayerTick(ClientTickEvent evt) {
+
+        if (getMinecraft().isGamePaused()) {
+            getMinecraft().gameSettings.pauseOnLostFocus = false;
+        }
+
+        //KeyBinding.setKeyBindState(getMinecraft().gameSettings.keyBindAttack.getKeyCode(), true);
+
         if (evt.phase != ClientTickEvent.Phase.START) {
             return;
         } else if (getMinecraft().thePlayer == null || getMinecraft().theWorld == null) {
