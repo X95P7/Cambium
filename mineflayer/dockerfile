@@ -1,0 +1,24 @@
+FROM node:22
+
+# Set the working directory
+WORKDIR /mineflayer
+
+# Install dependencies for native modules (node-gyp, gl, robotjs, etc.)
+RUN apt-get update && apt-get install -y \
+  netcat-openbsd \
+  python3 python3-pip python-is-python3 \
+  build-essential \
+  libxi-dev libx11-dev libxext-dev \
+  pkg-config
+
+# Copy package.json and install dependencies
+COPY package.json package-lock.json ./
+
+# Use npm ci for a clean installation
+RUN npm ci --omit=dev
+
+# Copy the rest of the bot files
+COPY . .
+
+# Start the bots
+CMD ["sh", "./start.sh"]

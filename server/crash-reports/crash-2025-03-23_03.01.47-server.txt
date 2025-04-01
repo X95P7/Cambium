@@ -1,0 +1,47 @@
+---- Minecraft Crash Report ----
+
+WARNING: coremods are present:
+  TickrateChanger (TickrateChanger-1.0.4.jar)
+Contact their authors BEFORE contacting forge
+
+// Don't do that.
+
+Time: 3/23/25 3:01 AM
+Description: Exception in server tick loop
+
+java.util.ConcurrentModificationException
+	at java.util.HashMap$HashIterator.nextNode(HashMap.java:1469)
+	at java.util.HashMap$KeyIterator.next(HashMap.java:1493)
+	at net.minecraft.entity.EntityTracker.func_72788_a(EntityTracker.java:259)
+	at net.minecraft.server.MinecraftServer.func_71190_q(MinecraftServer.java:713)
+	at net.minecraft.server.dedicated.DedicatedServer.func_71190_q(DedicatedServer.java:344)
+	at net.minecraft.server.MinecraftServer.func_71217_p(MinecraftServer.java:605)
+	at net.minecraft.server.MinecraftServer.run(MinecraftServer.java:481)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+A detailed walkthrough of the error, its code path and all known details is as follows:
+---------------------------------------------------------------------------------------
+
+-- System Details --
+Details:
+	Minecraft Version: 1.8.9
+	Operating System: Linux (amd64) version 5.15.167.4-microsoft-standard-WSL2
+	Java Version: 1.8.0_312, Temurin
+	Java VM Version: OpenJDK 64-Bit Server VM (mixed mode), Temurin
+	Memory: 1679271600 bytes (1601 MB) / 2084569088 bytes (1988 MB) up to 2084569088 bytes (1988 MB)
+	JVM Flags: 2 total; -Xmx2G -Xms2G
+	IntCache: cache: 0, tcache: 0, allocated: 0, tallocated: 0
+	FML: MCP 9.19 Powered by Forge 11.15.1.2318 4 mods loaded, 4 mods active
+	States: 'U' = Unloaded 'L' = Loaded 'C' = Constructed 'H' = Pre-initialized 'I' = Initialized 'J' = Post-initialized 'A' = Available 'D' = Disabled 'E' = Errored
+	UCHIJAAAA	mcp{9.19} [Minecraft Coder Pack] (minecraft.jar) 
+	UCHIJAAAA	FML{8.0.99.99} [Forge Mod Loader] (forge-1.8.9-11.15.1.2318-1.8.9-universal.jar) 
+	UCHIJAAAA	Forge{11.15.1.2318} [Minecraft Forge] (forge-1.8.9-11.15.1.2318-1.8.9-universal.jar) 
+	UCHIJAAAA	tickratechanger{1.0.4} [Tickrate Changer] (minecraft.jar) 
+	Loaded coremods (and transformers): 
+TickrateChanger (TickrateChanger-1.0.4.jar)
+  me.guichaguri.tickratechanger.TickrateTransformer
+	Profiler Position: N/A (disabled)
+	Player Count: 4 / 20; [EntityPlayerMP['Bot4'/7, l='world', x=0.00, y=18.25, z=28.30], EntityPlayerMP['Bot3'/8, l='world', x=-2.26, y=17.00, z=35.19], EntityPlayerMP['Bot2'/9, l='world', x=4.50, y=17.00, z=30.50], EntityPlayerMP['Bot1'/10, l='world', x=4.56, y=17.00, z=38.73]]
+	Is Modded: Definitely; Server brand changed to 'fml,forge'
+	Type: Dedicated Server (map_server.txt)
