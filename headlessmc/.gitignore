@@ -1,0 +1,51 @@
+# eclipse
+bin
+*.launch
+.settings
+.metadata
+.classpath
+.project
+
+# idea
+out
+*.ipr
+*.iws
+*.iml
+.idea
+
+# gradle
+build
+.gradle
+
+# other
+eclipse
+run
+
+# HeadlessMC
+/HeadlessMC/
+/headlessmc-launcher/HeadlessMC/
+/headlessmc-launcher-jfx/HeadlessMC/
+/headlessmc-launcher-wrapper/HeadlessMC/
+/headlessmc-test/HeadlessMC/
+
+# Created by some launcher tests
+/headlessmc-launcher/test/
+/test/
+
+# Created by LaunchWrapper tests
+/headlessmc-lwjgl/logs/
+/logs/
+/headlessmc-launcher-*.jar
+/libs/
+/headlessmc-launcher/libs/
+/fabricloader.log
+/.mixin.out/
+/headlessmc-runtime/HeadlessMC/
+/headlessmc-launcher-wrapper/logs/
+/headlessmc-logging/HeadlessMC/
+/headlessmc-jline/HeadlessMC/
+/headlessmc-api/HeadlessMC/
+
+*.jar
+!*gradle-wrapper.jar
+/mc/

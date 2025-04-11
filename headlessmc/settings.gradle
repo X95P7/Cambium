@@ -1,0 +1,21 @@
+rootProject.name = 'headlessmc'
+include 'headlessmc-api'
+include 'headlessmc-os'
+include 'headlessmc-java'
+include 'headlessmc-logging'
+include 'headlessmc-jline'
+include 'headlessmc-modlauncher'
+include 'headlessmc-auth'
+include 'headlessmc-runtime'
+include 'headlessmc-lwjgl'
+include 'headlessmc-launcher'
+include 'headlessmc-launcher-jfx'
+include 'headlessmc-launcher-wrapper'
+include 'headlessmc-web'
+
+include 'headlessmc-web-plugin'
+project(':headlessmc-web-plugin').projectDir = file('headlessmc-web/plugin')
+
+if (hmc_graal_build.toBoolean()) {
+    include 'headlessmc-graalvm'
+}

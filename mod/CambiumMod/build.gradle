@@ -59,3 +59,6 @@ processResources
         exclude 'mcmod.info'
     }
 }
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8

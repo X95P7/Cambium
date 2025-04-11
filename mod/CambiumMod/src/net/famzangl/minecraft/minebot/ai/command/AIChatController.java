@@ -61,6 +61,7 @@ import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandLeftClick;
 import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandMovement;
 import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandRightClick;
 import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandSwapInventory;
+import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandScreenshot;
 import net.famzangl.minecraft.minebot.ai.commands.cambium.CommandTest;
 import net.famzangl.minecraft.minebot.ai.scripting.CommandJs;
 import net.famzangl.minecraft.minebot.build.commands.CommandBuild;
@@ -156,6 +157,7 @@ public class AIChatController {
 		registerCommand(CommandMovement.class);
 		registerCommand(CommandRightClick.class);
 		registerCommand(CommandSwapInventory.class);
+		registerCommand(CommandScreenshot.class);
 		registerCommand(CommandTest.class);
 		
 	}

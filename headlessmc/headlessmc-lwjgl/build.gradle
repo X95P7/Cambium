@@ -1,0 +1,104 @@
+apply plugin: 'headlessmc-modules'
+
+repositories {
+    mavenCentral()
+    maven {
+        name 'MinecraftMaven'
+        url 'https://libraries.minecraft.net/'
+    }
+}
+
+module {
+    name = 'headlessmc.lwjgl'
+    access = ACC_OPEN
+
+    exports 'me/earth/headlessmc/lwjgl'
+    exports 'me/earth/headlessmc/lwjgl/api'
+    exports 'me/earth/headlessmc/lwjgl/transformer'
+    exports 'me/earth/headlessmc/lwjgl/redirections'
+    exports 'me/earth/headlessmc/lwjgl/util'
+    exports 'me/earth/headlessmc/lwjgl/agent'
+
+    requires 'java.desktop'
+    requires 'java.instrument', ACC_STATIC
+    requires 'org.objectweb.asm.tree', ACC_STATIC
+    requires 'org.objectweb.asm', ACC_STATIC
+}
+
+configurations {
+    // make launchwrapper available to tests
+    testImplementation.extendsFrom compileOnly
+}
+
+dependencies {
+    compileOnly(group: 'net.minecraft', name: 'launchwrapper', version: '1.12') {
+        exclude module: 'asm-debug-all'
+        // exclude unsafe log4j 2.0.9
+        exclude module: 'log4j-api'
+        exclude module: 'log4j-core'
+        // We don't exclude the LWJGL dependency because even though it's
+        // outdated, it can be nice to get an idea of what some Lwjgl classes
+        // look like when debugging the LWJGL instrumentation.
+    }
+
+    // TODO: the RedirectionApi should be in a separate module, since it
+    //  does not need ASM and ASM might not be available at runtime
+    jarLibsApi group: 'org.ow2.asm', name: 'asm', version: '9.7'
+    jarLibsApi group: 'org.ow2.asm', name: 'asm-tree', version: '9.7'
+
+    testImplementation(testFixtures(project(':headlessmc-api')))
+    // Only for the LaunchWrapperTest, which is skipped on Java > 8
+    if (JavaVersion.current() <= JavaVersion.VERSION_1_8) {
+        testRuntimeOnly 'org.apache.logging.log4j:log4j-api:2.23.1'
+        testRuntimeOnly 'org.apache.logging.log4j:log4j-core:2.23.1'
+    }
+}
+
+jar {
+    //noinspection GroovyAssignabilityCheck
+    manifest {
+        attributes 'TweakClass': 'me.earth.headlessmc.lwjgl.launchwrapper.LwjglTweaker'
+        attributes 'Premain-Class': 'me.earth.headlessmc.lwjgl.agent.LwjglAgent'
+        attributes 'Agent-Class': 'me.earth.headlessmc.lwjgl.agent.LwjglAgent'
+        attributes 'Can-Redefine-Classes': true
+        attributes 'Can-Retransform-Classes': true
+    }
+}
+
+// https://github.com/3arthqu4ke/headlessmc/issues/199
+// fabric 0.16.2+ doesn't like multiple asm versions in the classpath
+tasks.register('noAsmJar', Copy) {
+    dependsOn jar
+    from jar.archiveFile
+    into layout.buildDirectory.dir('noasm')
+    rename { fileName ->
+        fileName.replace("-${version}-dev.jar", "-${version}-no-asm.jar")
+    }
+}
+
+build.dependsOn(noAsmJar)
+
+tasks.register('testAgent', Test) {
+    dependsOn jar
+    group = 'verification'
+    useJUnitPlatform()
+    testLogging {
+        events "failed"
+        exceptionFormat "full"
+    }
+
+    jvmArgs = [
+        "-javaagent:$projectDir/build/libs/headlessmc-lwjgl-${rootProject.version}.jar",
+        '-Dhmc.lwjgl.agenttest=true'
+    ]
+
+    filter {
+        includeTestsMatching 'me.earth.headlessmc.lwjgl.agent.AgentTest'
+    }
+}
+
+shadowJar {
+    excludes.remove("module-info.class")
+}
+
+test.finalizedBy(testAgent)
