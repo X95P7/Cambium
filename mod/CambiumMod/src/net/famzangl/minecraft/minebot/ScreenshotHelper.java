@@ -6,13 +6,37 @@ import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.util.ScreenShotHelper;
 import java.io.File;
 
-public class ScreenshotHelper {
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.shader.Framebuffer;
+import net.minecraft.util.ScreenShotHelper;
 
-    public static void takeScreenshot() {
-        GuiScreen currentScreen = Minecraft.getMinecraft().currentScreen;
-        Minecraft mc = Minecraft.getMinecraft();
-        System.out.println("Taking screenshot...");
-        File screenshotsDir = new File(mc.mcDataDir, "headlessScreenshots");
-        ScreenShotHelper.saveScreenshot(screenshotsDir, mc.getFramebuffer());
+import java.io.File;
+
+public class ScreenshotHelper {
+    private final Minecraft mc;
+
+    public ScreenshotHelper() {
+        this.mc = Minecraft.getMinecraft();
+    }
+
+    public void takeScreenshot() {
+        // Path to save screenshots inside the container (maps to C:\Cambium\screenshots on host)
+        File screenshotDir = new File("/screenshots");
+
+        // Ensure the directory exists
+        if (!screenshotDir.exists()) {
+            boolean created = screenshotDir.mkdirs();
+            if (!created) {
+                System.err.println("Failed to create screenshot directory!");
+                return;
+            }
+        }
+    
+        // Get the current framebuffer
+        Framebuffer framebuffer = mc.getFramebuffer();
+    
+        // Save the screenshot in the desired directory
+        ScreenShotHelper.saveScreenshot(screenshotDir, mc.displayWidth, mc.displayHeight, framebuffer);
     }
 }
+

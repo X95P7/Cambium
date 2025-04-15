@@ -30,7 +30,7 @@ public class CommandScreenshot {
 public static AIStrategy run(
         AIHelper helper,
         @AICommandParameter(type = ParameterType.FIXED, fixedName = "s", description = "") String nameArg) {
-            ScreenshotHelper.takeScreenshot();
+            new ScreenshotHelper().takeScreenshot();
     return null;
 }
 }

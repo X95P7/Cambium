@@ -59,7 +59,7 @@ public interface LauncherProperties extends HmcProperties {
     Property<String> OFFLINE_UUID = string("hmc.offline.uuid");
     Property<String> OFFLINE_TOKEN = string("hmc.offline.token");
 
-    // TODO: also check hashes for the libraries?
+    // TODO: also _XV hashes for the libraries?
     Property<Long> ASSETS_DELAY = number("hmc.assets.delay");
     Property<Long> ASSETS_RETRIES = number("hmc.assets.retries");
     Property<Boolean> ASSETS_PARALLEL = bool("hmc.assets.parallel");
