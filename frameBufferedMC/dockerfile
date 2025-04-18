@@ -1,0 +1,47 @@
+FROM openjdk:8-jre
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    xvfb \
+    wget \
+    unzip \
+    curl \
+    ca-certificates \
+    libgl1-mesa-glx \
+    libxext6 \
+    libxi6 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /minecraft
+
+# Download and install Minecraft Launcher (CLI-based) and Forge manually
+RUN mkdir -p /minecraft/.minecraft
+
+# Add Minecraft launcher JAR (CLI login/launch requires separate tool or prefilled files)
+# We'll assume user will mount in .minecraft with their login/session info
+
+# Copy mods from host during build OR you can bind-mount them at runtime
+COPY mods /minecraft/.minecraft/mods
+
+# Copy any config, options.txt, etc. if you have them
+# COPY config /minecraft/.minecraft/config
+
+# Xvfb resolution and display depth
+ENV DISPLAY=:1
+ENV SCREEN_WIDTH=1280
+ENV SCREEN_HEIGHT=720
+ENV SCREEN_DEPTH=24
+
+# Install Forge 1.8.9 manually
+RUN wget -O forge-installer.jar "https://maven.minecraftforge.net/net/minecraftforge/forge/1.8.9-11.15.1.2318-1.8.9/forge-1.8.9-11.15.1.2318-1.8.9-installer.jar"
+RUN java -jar forge-installer.jar --installClient --target /minecraft/.minecraft
+RUN rm forge-installer.jar
+
+# Optional: copy in Minecraft options and server list with autojoin logic
+# Replace with your own options.txt and servers.dat to configure resolution, fullscreen, etc.
+# You could also script auto-login using tools like [MCLauncherAuth](https://github.com/xzandro/mclauncher-auth)
+
+# CMD to run Minecraft Forge client with virtual framebuffer
+CMD xvfb-run -s "-screen 0 ${SCREEN_WIDTH}x${SCREEN_HEIGHT}x${SCREEN_DEPTH}" \
+    java -Xmx2G -Djava.awt.headless=true -Duser.home=/minecraft -cp /minecraft/.minecraft/libraries/*:/minecraft/.minecraft/versions/1.8.9/1.8.9.jar \
+    net.minecraft.launchwrapper.Launch --username DockerUser --version 1.8.9 --gameDir /minecraft/.minecraft --assetsDir /minecraft/.minecraft/assets --tweakClass net.minecraftforge.fml.common.launcher.FMLTweaker
