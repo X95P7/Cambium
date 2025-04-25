@@ -23,6 +23,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map.Entry;
 
+import net.famzangl.minecraft.minebot.PhysicsController;
 import net.famzangl.minecraft.minebot.ai.command.AIChatController;
 import net.famzangl.minecraft.minebot.ai.command.IAIControllable;
 import net.famzangl.minecraft.minebot.ai.net.MinebotNetHandler;
@@ -100,6 +101,7 @@ public class AIController extends AIHelper implements IAIControllable {
     private static final Marker MARKER_STRATEGY = MarkerManager.getMarker("strategy");
     private static final Marker MARKER_MOUSE = MarkerManager.getMarker("mouse");
     private static final Logger LOGGER = LogManager.getLogger(AIController.class);
+    private PhysicsController physicsController = new PhysicsController();
 
     private final static Hashtable<KeyBinding, AIStrategyFactory> uses = new Hashtable<KeyBinding, AIStrategyFactory>();
 
@@ -172,9 +174,11 @@ public class AIController extends AIHelper implements IAIControllable {
     @SubscribeEvent
     public void onPlayerTick(ClientTickEvent evt) {
 
+
         if (getMinecraft().isGamePaused()) {
             getMinecraft().gameSettings.pauseOnLostFocus = false;
         }
+
 
         //KeyBinding.setKeyBindState(getMinecraft().gameSettings.keyBindAttack.getKeyCode(), true);
 
@@ -184,6 +188,8 @@ public class AIController extends AIHelper implements IAIControllable {
             LOGGER.debug(MARKER_STRATEGY, "Player tick but player is not in world.");
             return;
         }
+
+        physicsController.tick();
 
         LOGGER.debug(MARKER_STRATEGY, "Strategy game tick. World time: " + getMinecraft().theWorld.getTotalWorldTime());
         testUngrabMode();

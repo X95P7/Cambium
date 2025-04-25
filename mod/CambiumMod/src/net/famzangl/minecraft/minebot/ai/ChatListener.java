@@ -5,6 +5,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
+import net.famzangl.minecraft.minebot.PhysicsController;
 import net.famzangl.minecraft.minebot.ai.command.AIChatController;
 import net.famzangl.minecraft.minebot.ai.strategy.cambium.LeftClickStrategy;
 import net.minecraft.client.entity.EntityPlayerSP;
@@ -13,11 +14,21 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 
 public class ChatListener {
 
+	private PhysicsController controller = new PhysicsController();
+
     @SubscribeEvent
     public void onChatReceived(ClientChatReceivedEvent event) {
-		AIChatController.addChatLine("message sent");
         // Get the message as a string
         String message = event.message.getUnformattedText();
+
+		if(message.contains(".step")){
+			try{
+				AIChatController.addChatLine("Stepping");
+				controller.step();
+			} catch(Exception e){
+				AIChatController.addChatLine("Error: " + e.toString());
+			}
+		}
 
         // Check if the message contains the target phrase
         if (message.contains("&setup")) {

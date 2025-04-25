@@ -60,6 +60,7 @@ public class MinebotMod {
 	
 	@EventHandler
 	public void init(FMLInitializationEvent event) {
+
 		BlockBoundsCache.initialize();
 		FMLCommonHandler.instance().bus().register(new PlayerUpdateHandler());
 		final AIController controller = AIController.getInstance();

@@ -1,5 +1,3 @@
-#!/bin/bash
-
 # Start Xvfb with proper parameters and more verbose output
 echo "Starting Xvfb..."
 Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
@@ -69,22 +67,3 @@ cd /headlessmc
 # Combined login and launch command
 echo "Logging in and launching Minecraft..."
 hmc login Xylimalt@gmail.com Xsoccer98! && hmc launch forge:1.8.9 -commands
-
-# Check if Minecraft crashed
-if [ $? -ne 0 ]; then
-    echo "Minecraft crashed. Check crash logs in /headlessmc/HeadlessMC/run/crash-reports/"
-    # List the latest crash report
-    ls -la /headlessmc/HeadlessMC/run/crash-reports/ | tail -5
-    
-    # If there are crash reports, show the most recent one
-    LATEST_CRASH=$(ls -t /headlessmc/HeadlessMC/run/crash-reports/ | head -1)
-    if [ ! -z "$LATEST_CRASH" ]; then
-        echo "Contents of latest crash report:"
-        cat "/headlessmc/HeadlessMC/run/crash-reports/$LATEST_CRASH"
-    fi
-fi
-
-# Keep container running to inspect or take screenshots
-echo "Minecraft process finished. Keeping container alive for inspection."
-echo "Use 'docker exec' to connect to this container if needed."
-tail -f /dev/null
