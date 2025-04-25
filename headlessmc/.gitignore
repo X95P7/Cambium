@@ -46,6 +46,5 @@ run
 /headlessmc-jline/HeadlessMC/
 /headlessmc-api/HeadlessMC/
 
-*.jar
 !*gradle-wrapper.jar
 /mc/

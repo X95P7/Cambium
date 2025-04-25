@@ -31,5 +31,6 @@ mineflayer/node_modules
 
 !gradle-wrapper.jar
 !dummy.png
+!/headlessmc/mods/*.jar
 
 
