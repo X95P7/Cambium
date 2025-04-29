@@ -11,6 +11,9 @@ RUN apt-get update && \
 ARG MC_VERSION=1.8.9
 ARG HMC_VERSION=2.5.1
 
+ENV EMAIL=
+ENV PASSWORD=
+ENV SERVER=
 # Make them available at runtime too
 ENV MC_VERSION=${MC_VERSION}
 ENV HMC_VERSION=${HMC_VERSION}
@@ -24,7 +27,7 @@ ENV HOME=/root \
     HMC_VERSION=${HMC_VERSION} \
     HEADLESSMC_COMMAND=--jvm\ -Djava.awt.headless=true
 
-
+RUN  apt-get update && apt-get install netcat
 # Install Xvfb and wget
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -69,5 +72,16 @@ COPY mods/ $HOME/.minecraft/mods/
 VOLUME ["/opt/hmc/run"]
 
 # Default command: run under Xvfb and launch the Forge client
-ENTRYPOINT ["sh", "-c", "xvfb-run java -Dhmc.check.xvfb=true -jar headlessmc-launcher-${HMC_VERSION}.jar --command login [EMAIL] [PASSWORD] && xvfb-run java -Dhmc.check.xvfb=true -jar headlessmc-launcher-${HMC_VERSION}.jar --command launch forge:1.8.9 $HEADLESSMC_COMMAND"]
 
+COPY entrypoint.sh /opt/hmc/entrypoint.sh
+RUN chmod +x /opt/hmc/entrypoint.sh
+
+ENTRYPOINT ["/opt/hmc/entrypoint.sh"]
+
+#ENTRYPOINT ["sh", "-c", "\
+#xvfb-run java -Dhmc.check.xvfb=true -jar headlessmc-launcher-${HMC_VERSION}.jar --command login ${EMAIL} ${PASSWORD} && \
+#xvfb-run java -Dhmc.check.xvfb=true -jar headlessmc-launcher-${HMC_VERSION}.jar --command launch forge:1.8.9 ${HEADLESSMC_COMMAND} && \
+#if [ ! -z \"$SERVER\" ]; then sleep 5 && echo 'connect $SERVER' > /dev/tty; fi"]
+
+#ENTRYPOINT ["sh", "-c", "xvfb-run java -Dhmc.check.xvfb=true -jar headlessmc-launcher-${HMC_VERSION}.jar --command launch forge:1.8.9 $HEADLESSMC_COMMAND"]
+# ENTRYPOINT ["sh", "-c", "xvfb-run java -Dhmc.check.xvfb=true -jar headlessmc-launcher-${HMC_VERSION}.jar --command login [EMAIL] [PASSWORD] && xvfb-run java -Dhmc.check.xvfb=true -jar headlessmc-launcher-${HMC_VERSION}.jar --command launch forge:1.8.9 $HEADLESSMC_COMMAND"]

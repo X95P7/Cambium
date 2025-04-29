@@ -28,6 +28,7 @@ mineflayer/node_modules
 *.dll
 *.png
 #Minecraft/
+*.env
 
 !gradle-wrapper.jar
 !dummy.png

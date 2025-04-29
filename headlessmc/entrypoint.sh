@@ -1,18 +1,22 @@
 #!/bin/sh
-set -ex
 
-JAR="headlessmc-launcher-${HMC_VERSION}.jar"
+echo "Waiting for Minecraft server to start..."
+until nc -z -v -w30 mc-forge 25565; do
+  echo "Waiting for mc-forge on port 25565..."
+  sleep 5
+done
 
-if [ -n "$HMC_EMAIL" ] && [ -n "$HMC_PASSWORD" ] ; then
-  echo "⏳ Logging into Minecraft account…"
-  java -jar "$JAR" --command login "$HMC_EMAIL" "$HMC_PASSWORD"
-fi
+echo "Minecraft server detected. Launching HeadlessMC setup..."
 
-echo "🚀 Launching Minecraft under Xvfb…"
-echo "CMD: xvfb-run java -Dhmc.check.xvfb=true -jar $JAR --command launch forge:${MC_VERSION} $HEADLESSMC_COMMAND"
+# Ensure the base game and Forge are downloaded before launching
+java -jar headlessmc-launcher-${HMC_VERSION}.jar --command download ${MC_VERSION}
+java -jar headlessmc-launcher-${HMC_VERSION}.jar --command forge ${MC_VERSION} --java $JAVA_HOME/bin/java
 
-exec xvfb-run java \
-  -Dhmc.check.xvfb=true \
-  -jar "$JAR" \
-  --command launch forge:"${MC_VERSION}" \
-  $HEADLESSMC_COMMAND
+# Login
+xvfb-run java -Dhmc.check.xvfb=true -jar headlessmc-launcher-${HMC_VERSION}.jar --command login ${EMAIL} ${PASSWORD}
+
+# Launch the game
+xvfb-run java -Dhmc.check.xvfb=true -jar headlessmc-launcher-${HMC_VERSION}.jar --command launch forge:1.8.9 $HEADLESSMC_COMMAND
+
+# Finally, connect to the server
+xvfb-run java -Dhmc.check.xvfb=true -jar headlessmc-launcher-${HMC_VERSION}.jar --command connect ${SERVER}

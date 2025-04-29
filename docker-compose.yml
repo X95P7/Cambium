@@ -11,7 +11,7 @@ services:
       VERSION: "1.8.9"
       MEMORY: "2G"
       ENABLE_RCON: "TRUE"
-      RCON_PASSWORD: "minecraft"  # Change for security
+      RCON_PASSWORD: "minecraft"
     volumes:
       - ./server:/data
     restart: unless-stopped
@@ -26,10 +26,26 @@ services:
       - mc-forge
     volumes:
       - /var/run/docker.sock:/v
-  mineflayer-bots:
-    build: ./mineflayer  # Ensure this is pointing to the correct directory with your bot's Dockerfile
+
+  headlessmc:
+    build: ./headlessmc
+    stdin_open: true
+    tty: true
     environment:
-      - BOT_COUNT=1  # Set the number of bots you want to run here
+      - EMAIL
+      - PASSWORD
+      - SERVER
     depends_on:
       - mc-forge
-    entrypoint: ["sh", "-c", "echo 'Waiting for Minecraft server to start...';until nc -z -v -w30 mc-forge 25565; do sleep 5; done;echo 'Port 25565 is open, waiting for server to be fully ready...';sleep 3;exec sh start.sh"]
+    volumes:
+      - ./mods:/root/.minecraft/mods
+
+
+
+  #mineflayer-bots:
+   # build: ./mineflayer  # Ensure this is pointing to the correct directory with your bot's Dockerfile
+   # environment:
+    #  - BOT_COUNT=1  # Set the number of bots you want to run here
+    #depends_on:
+    #  - mc-forge
+    #entrypoint: ["sh", "-c", "echo 'Waiting for Minecraft server to start...';until nc -z -v -w30 mc-forge 25565; do sleep 5; done;echo 'Port 25565 is open, waiting for server to be fully ready...';sleep 3;exec sh start.sh"]
