@@ -27,7 +27,8 @@ ENV HOME=/root \
     HMC_VERSION=${HMC_VERSION} \
     HEADLESSMC_COMMAND=--jvm\ -Djava.awt.headless=true
 
-RUN  apt-get update && apt-get install netcat
+RUN apt-get update && apt-get install -y netcat
+RUN apt-get update && apt-get install -y expect
 # Install Xvfb and wget
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -71,7 +72,10 @@ COPY mods/ $HOME/.minecraft/mods/
 # Expose the game directory as a volume if you want to persist saves or logs
 VOLUME ["/opt/hmc/run"]
 
-# Default command: run under Xvfb and launch the Forge client
+# Pre-download Minecraft version and Forge during build
+#RUN java -jar headlessmc-launcher-${HMC_VERSION}.jar --yes --command download ${MC_VERSION} && \
+ #   java -jar headlessmc-launcher-${HMC_VERSION}.jar --yes --command forge ${MC_VERSION} --java $JAVA_HOME/bin/java
+
 
 COPY entrypoint.sh /opt/hmc/entrypoint.sh
 RUN chmod +x /opt/hmc/entrypoint.sh

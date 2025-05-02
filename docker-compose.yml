@@ -37,8 +37,6 @@ services:
       - SERVER
     depends_on:
       - mc-forge
-    volumes:
-      - ./mods:/root/.minecraft/mods
 
 
 
