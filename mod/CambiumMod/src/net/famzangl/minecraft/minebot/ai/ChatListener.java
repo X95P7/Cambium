@@ -7,7 +7,7 @@ import java.net.URL;
 
 import net.famzangl.minecraft.minebot.PhysicsController;
 import net.famzangl.minecraft.minebot.ai.command.AIChatController;
-import net.famzangl.minecraft.minebot.ai.strategy.cambium.LeftClickStrategy;
+import net.famzangl.minecraft.minebot.ai.strategy.cambium.PvPStrategy;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraftforge.client.event.ClientChatReceivedEvent;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
@@ -15,6 +15,7 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 public class ChatListener {
 
 	private PhysicsController controller = new PhysicsController();
+	private boolean pvpActive = false;
 
     @SubscribeEvent
     public void onChatReceived(ClientChatReceivedEvent event) {
@@ -77,6 +78,29 @@ public class ChatListener {
 
             // Optional: Cancel the message from appearing in chat
             // event.setCanceled(true);
+        }
+        
+        // Check for PvP toggle trigger: {username}_pvp1
+        AIController controller = AIController.getInstance();
+        EntityPlayerSP player = controller.getMinecraft().thePlayer;
+        if (player != null) {
+            String playerName = player.getName();
+            String pvpTrigger = playerName + "_pvp1";
+            
+            if (message.contains(pvpTrigger)) {
+                if (pvpActive) {
+                    // Stop PvP
+                    controller.clearStrategies();
+                    pvpActive = false;
+                    AIChatController.addChatLine("PvP mode disabled");
+                } else {
+                    // Start PvP
+                    PvPStrategy pvpStrategy = new PvPStrategy();
+                    controller.requestUseStrategy(pvpStrategy);
+                    pvpActive = true;
+                    AIChatController.addChatLine("PvP mode enabled - searching for players to attack");
+                }
+            }
         }
     }
 }

@@ -27,19 +27,47 @@ services:
     volumes:
       - /var/run/docker.sock:/v
 
-  headlessmc:
+  headlessmc1:
     build: ./headlessmc
+    container_name: headlessmc1
     stdin_open: true
     tty: true
     environment:
-      - EMAIL
-      - PASSWORD
-      - SERVER
+      # Offline mode: EMAIL and PASSWORD are empty (no login required)
+      - EMAIL=
+      - PASSWORD=
+      - SERVER=mc-forge:25565
+      - USERNAME=Bot1
+      # Use virtual framebuffer (xvfb) for headless rendering (set to false to disable)
+      - USE_XVFB=false
     depends_on:
       - mc-forge
     volumes:
-      # Persist HeadlessMC downloads so they don't need to be re-downloaded
+      # Persist HeadlessMC downloads (shared)
       - headlessmc-data:/opt/hmc/HeadlessMC
+      # Separate game directory for each bot
+      - headlessmc1-gamedir:/opt/hmc/run
+
+  headlessmc2:
+    build: ./headlessmc
+    container_name: headlessmc2
+    stdin_open: true
+    tty: true
+    environment:
+      # Offline mode: EMAIL and PASSWORD are empty (no login required)
+      - EMAIL=
+      - PASSWORD=
+      - SERVER=mc-forge:25565
+      - USERNAME=Bot2
+      # Use virtual framebuffer (xvfb) for headless rendering (set to false to disable)
+      - USE_XVFB=false
+    depends_on:
+      - mc-forge
+    volumes:
+      # Persist HeadlessMC downloads (shared)
+      - headlessmc-data:/opt/hmc/HeadlessMC
+      # Separate game directory for each bot
+      - headlessmc2-gamedir:/opt/hmc/run
 
 
 
@@ -53,3 +81,5 @@ services:
 
 volumes:
   headlessmc-data:
+  headlessmc1-gamedir:
+  headlessmc2-gamedir:

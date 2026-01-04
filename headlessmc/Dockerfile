@@ -19,7 +19,8 @@ ENV HEADLESSMC_COMMAND=--jvm\ -Djava.awt.headless=true
 ENV HOME=/root \
     MC_VERSION=${MC_VERSION} \
     HMC_VERSION=${HMC_VERSION} \
-    HEADLESSMC_COMMAND=--jvm\ -Djava.awt.headless=true
+    HEADLESSMC_COMMAND=--jvm\ -Djava.awt.headless=true \
+    USERNAME=Player
 
 # Install all packages in one layer for better caching
 # Note: netcat-openbsd and libasound2t64 are used instead of virtual packages in newer Ubuntu
