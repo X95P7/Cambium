@@ -1,7 +1,7 @@
 #!/usr/bin/expect -f
 
-# Never timeout
-set timeout -1
+# Set timeout for startup (60 seconds), then no timeout for running game
+set timeout 60
 
 # 1) Wait for the Minecraft server to be up
 puts "Waiting for mc-forge to start..."
@@ -100,10 +100,14 @@ if {$doLogin} {
   }
 }
 
-# 4) Send launch and connect commands
-# 1) Wait for that unique "Sound engine started" line
+# 4) Wait for Minecraft to fully load, then connect to server
+set connected 0
 expect {
-  -re {Client thread/INFO\]: Created: 1024x512 textures-atlas} {
+  -re {Client thread/INFO\]: Created: (1024|512)x(1024|512) textures-atlas} {
+    # Once we see textures loaded, switch to no timeout for game runtime
+    set timeout -1
+    # Wait for game to fully initialize before connecting
+    after 5000
     # Parse SERVER environment variable (format: host:port or just host)
     set server $env(SERVER)
     if {[regexp {^([^:]+):?(\d+)?$} $server match host port]} {
@@ -112,18 +116,38 @@ expect {
       }
       puts "Connecting to $host:$port"
       send "connect $host $port\r"
+      set connected 1
     } else {
       # Fallback: try to use SERVER as-is, but split on colon
       set parts [split $server ":"]
       if {[llength $parts] == 2} {
         send "connect [lindex $parts 0] [lindex $parts 1]\r"
+        set connected 1
       } else {
         send "connect $server 25565\r"
+        set connected 1
       }
     }
-    send "say Hello, world!\r"
-    # once we see it, fall through to next step
+    # Wait for connection to establish before sending chat
+    after 3000
+    if {$connected == 1} {
+      send "say Hello, world!\r"
+    }
+    exp_continue
+  }
+  -re {.*} {
+    exp_continue
+  }
+  eof {
+    puts "Minecraft process ended"
+  }
+  timeout {
+    puts "ERROR: Timeout waiting for Minecraft to start (60 seconds)."
+    puts "This usually means Minecraft is hanging during initialization."
+    puts "Common causes:"
+    puts "  1. USE_XVFB=false - Minecraft needs a virtual framebuffer. Set USE_XVFB=true"
+    puts "  2. Graphics/display initialization failure"
+    puts "  3. Missing dependencies or configuration issues"
+    exit 1
   }
 }
-
-expect eof

@@ -36,15 +36,19 @@ RUN apt-get update && \
 WORKDIR /opt/hmc
 
 # 1) Bootstrap HeadlessMC configuration
-RUN mkdir -p run/mods && \
+RUN mkdir -p run/mods HeadlessMC && \
     cat > config.properties <<EOF
 hmc.java.versions=$JAVA_HOME/bin/java
 hmc.gamedir=$PWD/run
 hmc.offline=true
+hmc.offline.username=Player
+hmc.offline.type=msa
+hmc.offline.uuid=22689332a7fd41919600b0fe1135ee34
 hmc.rethrow.launch.exceptions=true
 hmc.exit.on.failed.command=false
 hmc.assets.dummy=true
 EOF
+RUN cp config.properties HeadlessMC/config.properties
 
 # 2) Download the HeadlessMC launcher jar
 RUN wget -qO headlessmc-launcher-${HMC_VERSION}.jar \

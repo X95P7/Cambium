@@ -4,9 +4,21 @@ FROM python:3.11
 # Set the working directory in the container
 WORKDIR /app
 
+# Install system dependencies for PyTorch (if needed)
+RUN apt-get update && apt-get install -y \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy the requirements and install dependencies
 COPY requirements.txt .
+# Install PyTorch CPU version (lightweight, suitable for most cases)
+# For GPU support, uncomment the GPU version line and comment the CPU line
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# For GPU (CUDA 11.8): RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Create models directory for saving checkpoints
+RUN mkdir -p models
 
 # Copy the rest of the application code
 COPY . .

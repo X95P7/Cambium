@@ -31,6 +31,18 @@ public class BlockData {
         return z;
     }
 
+    public double getDistance(){
+        return distance;
+    }
+
+    public boolean isSolid(){
+        return solid;
+    }
+
+    public String getName(){
+        return name;
+    }
+
     public String toString(){
         return "X: " + x + " Y: " + y + " Z: " + z + " Solid: " + solid + " Name: " + name;
     }

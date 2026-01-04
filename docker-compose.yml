@@ -39,7 +39,7 @@ services:
       - SERVER=mc-forge:25565
       - USERNAME=Bot1
       # Use virtual framebuffer (xvfb) for headless rendering (set to false to disable)
-      - USE_XVFB=false
+      - USE_XVFB=true
     depends_on:
       - mc-forge
     volumes:
@@ -60,7 +60,7 @@ services:
       - SERVER=mc-forge:25565
       - USERNAME=Bot2
       # Use virtual framebuffer (xvfb) for headless rendering (set to false to disable)
-      - USE_XVFB=false
+      - USE_XVFB=true
     depends_on:
       - mc-forge
     volumes:
