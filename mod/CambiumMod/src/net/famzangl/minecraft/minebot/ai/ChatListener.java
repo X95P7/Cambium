@@ -38,8 +38,10 @@ public class ChatListener {
             String name = (player != null) ? player.getName() : "Unknown";
 
             try {
-					// URL of the Python API
-					URL url = new URL("http://127.0.0.1:8000/bot-setup");
+					// URL of the Python API - use service name for Docker Compose networking
+					String string_url = "http://backend:8000/bot-setup";
+					URL url = new URL(string_url);
+					System.out.println("attempting to connect to: " + string_url );
 					HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 		
 					// Set up the HTTP connection

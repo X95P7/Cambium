@@ -1,11 +1,5 @@
 # Use Java 8 (required by Forge 1.8.9)
-FROM openjdk:8-jdk-slim
-
-# install everything we need: xvfb, xauth, x11 tools, wget
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      xvfb xauth x11-xserver-utils wget && \
-    rm -rf /var/lib/apt/lists/*
+FROM eclipse-temurin:8-jdk
 
 # Allow these to be overridden at build time
 ARG MC_VERSION=1.8.9
@@ -27,14 +21,14 @@ ENV HOME=/root \
     HMC_VERSION=${HMC_VERSION} \
     HEADLESSMC_COMMAND=--jvm\ -Djava.awt.headless=true
 
-RUN apt-get update && apt-get install -y netcat
-RUN apt-get update && apt-get install -y expect
-# Install Xvfb and wget
+# Install all packages in one layer for better caching
+# Note: netcat-openbsd and libasound2t64 are used instead of virtual packages in newer Ubuntu
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      netcat-openbsd expect \
       xvfb xauth x11-xserver-utils wget \
       libxext6 libxrender1 libxtst6 libxi6 libxt6 libx11-6 \
-      libfontconfig1 libfreetype6 libasound2 \
+      libfontconfig1 libfreetype6 libasound2t64 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working dir
@@ -55,17 +49,20 @@ EOF
 RUN wget -qO headlessmc-launcher-${HMC_VERSION}.jar \
     https://github.com/3arthqu4ke/headlessmc/releases/download/${HMC_VERSION}/headlessmc-launcher-${HMC_VERSION}.jar
 
-# 3) Download Minecraft and install Forge
+# 3) Download Minecraft and install Forge (slow - cached unless MC_VERSION changes)
 RUN java -jar headlessmc-launcher-${HMC_VERSION}.jar --command download ${MC_VERSION} && \
     java -jar headlessmc-launcher-${HMC_VERSION}.jar --command forge ${MC_VERSION} --java $JAVA_HOME/bin/java
-
 
 RUN find /opt/hmc/HeadlessMC -name 'liblwjgl*.so' -exec execstack -c {} \;
 
 # Create the vanilla Minecraft mods folder under root
 RUN mkdir -p $HOME/.minecraft/mods
 
-# Copy your local mods directory into the container
+# Copy entrypoint first (changes less frequently)
+COPY entrypoint.sh /opt/hmc/entrypoint.sh
+RUN chmod +x /opt/hmc/entrypoint.sh
+
+# Copy mods LAST so mod changes don't invalidate the expensive Minecraft/Forge download cache
 COPY mods/ $HOME/.minecraft/mods/
 
 
@@ -76,9 +73,6 @@ VOLUME ["/opt/hmc/run"]
 #RUN java -jar headlessmc-launcher-${HMC_VERSION}.jar --yes --command download ${MC_VERSION} && \
  #   java -jar headlessmc-launcher-${HMC_VERSION}.jar --yes --command forge ${MC_VERSION} --java $JAVA_HOME/bin/java
 
-
-COPY entrypoint.sh /opt/hmc/entrypoint.sh
-RUN chmod +x /opt/hmc/entrypoint.sh
 
 ENTRYPOINT ["/opt/hmc/entrypoint.sh"]
 

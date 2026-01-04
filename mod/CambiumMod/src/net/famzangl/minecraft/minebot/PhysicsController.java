@@ -66,7 +66,7 @@ public class PhysicsController {
     public void tick() {
         long currentTime = System.currentTimeMillis();
         if (lastTickTime != -1) {
-            AIChatController.addChatLine("Time since last tick: " + (currentTime - lastTickTime) + " ms");
+            //AIChatController.addChatLine("Time since last tick: " + (currentTime - lastTickTime) + " ms");
         }
         lastTickTime = currentTime;
 

@@ -9,7 +9,7 @@ services:
       EULA: "TRUE"
       TYPE: "FORGE"
       VERSION: "1.8.9"
-      MEMORY: "2G"
+      MEMORY: "8G"
       ENABLE_RCON: "TRUE"
       RCON_PASSWORD: "minecraft"
     volumes:
@@ -37,6 +37,9 @@ services:
       - SERVER
     depends_on:
       - mc-forge
+    volumes:
+      # Persist HeadlessMC downloads so they don't need to be re-downloaded
+      - headlessmc-data:/opt/hmc/HeadlessMC
 
 
 
@@ -47,3 +50,6 @@ services:
     #depends_on:
     #  - mc-forge
     #entrypoint: ["sh", "-c", "echo 'Waiting for Minecraft server to start...';until nc -z -v -w30 mc-forge 25565; do sleep 5; done;echo 'Port 25565 is open, waiting for server to be fully ready...';sleep 3;exec sh start.sh"]
+
+volumes:
+  headlessmc-data:
