@@ -68,25 +68,98 @@ public class ChatListener {
 					}
 					is.close();
 					
-					// Start RL Controller Strategy
-					RLControllerStrategy rlStrategy = new RLControllerStrategy();
-					// Load configurations from API
-					rlStrategy.loadActionSpaceConfig();
-					rlStrategy.loadObservationSpaceConfig();
-					rlStrategy.loadModelEndpoint();
-					// Add strategy to controller
-					controller.addStrategy(rlStrategy);
-					AIChatController.addChatLine("RL Controller started!");
+					AIChatController.addChatLine("Bot " + name + " added to game!");
                 } catch (Exception e) {
 					AIChatController.addChatLine("Error: " + e.toString());
 					e.printStackTrace();
 				}
-            
+        }
         
-            //controller.addStrategy(new LeftClickStrategy(15, 20, controller.getAiHelper()));
-
-            // Optional: Cancel the message from appearing in chat
-            // event.setCanceled(true);
+        // &bot-setup: Load all configuration data (action space, observation space, model endpoint)
+        if (message.contains("&bot-setup")) {
+            System.out.println("Detected 'bot-setup' in chat!");
+            AIController controller = AIController.getInstance();
+            EntityPlayerSP player = controller.getMinecraft().thePlayer;
+            String name = (player != null) ? player.getName() : "Unknown";
+            
+            try {
+                // Create RL Controller Strategy instance (but don't add it yet)
+                RLControllerStrategy rlStrategy = new RLControllerStrategy();
+                
+                // Load configurations from API
+                AIChatController.addChatLine("Loading action space config...");
+                rlStrategy.loadActionSpaceConfig();
+                
+                AIChatController.addChatLine("Loading observation space config...");
+                rlStrategy.loadObservationSpaceConfig();
+                
+                AIChatController.addChatLine("Loading model endpoint for " + name + "...");
+                // AIController extends AIHelper, so we can use it directly
+                rlStrategy.loadModelEndpoint(controller);
+                
+                // Store the strategy instance for later use with &run
+                // We'll store it in a static map or similar - for now, just notify
+                AIChatController.addChatLine("Bot setup complete! Use &run to start the bot.");
+                
+                // Store strategy in controller for later retrieval
+                controller.setStoredRLStrategy(rlStrategy);
+            } catch (Exception e) {
+                AIChatController.addChatLine("Error in bot-setup: " + e.toString());
+                e.printStackTrace();
+            }
+        }
+        
+        // &run: Start the RL Controller Strategy
+        if (message.contains("&run")) {
+            System.out.println("Detected 'run' in chat!");
+            AIController controller = AIController.getInstance();
+            
+            try {
+                // Get stored RL strategy from controller
+                RLControllerStrategy rlStrategy = controller.getStoredRLStrategy();
+                
+                if (rlStrategy == null) {
+                    // If no stored strategy, create a new one and load configs
+                    AIChatController.addChatLine("No stored strategy found. Creating new one...");
+                    rlStrategy = new RLControllerStrategy();
+                    
+                    // Load configurations
+                    rlStrategy.loadActionSpaceConfig();
+                    rlStrategy.loadObservationSpaceConfig();
+                    
+                    // AIController extends AIHelper, so we can use it directly
+                    rlStrategy.loadModelEndpoint(controller);
+                }
+                
+                // Add strategy to controller
+                controller.addStrategy(rlStrategy);
+                AIChatController.addChatLine("RL Controller started!");
+            } catch (Exception e) {
+                AIChatController.addChatLine("Error starting RL Controller: " + e.toString());
+                e.printStackTrace();
+            }
+        }
+        
+        // &reset: Clear all strategies and reset bot state
+        if (message.contains("&reset")) {
+            System.out.println("Detected 'reset' in chat!");
+            AIController controller = AIController.getInstance();
+            
+            try {
+                // Clear all active strategies
+                controller.clearStrategies();
+                
+                // Clear stored RL strategy
+                controller.setStoredRLStrategy(null);
+                
+                // Reset physics controller
+                PhysicsController physicsController = new PhysicsController();
+                
+                AIChatController.addChatLine("Bot reset complete! All strategies cleared.");
+            } catch (Exception e) {
+                AIChatController.addChatLine("Error resetting bot: " + e.toString());
+                e.printStackTrace();
+            }
         }
     }
 }

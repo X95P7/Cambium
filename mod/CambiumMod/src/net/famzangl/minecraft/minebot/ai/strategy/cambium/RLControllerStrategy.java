@@ -66,7 +66,7 @@ public class RLControllerStrategy extends AIStrategy {
     protected TickResult onGameTick(AIHelper helper) {
         try {
             // Update tick timing
-            updateTickTiming();
+            //updateTickTiming();
             
             // Collect observations
             collectObservations(helper);
@@ -235,10 +235,9 @@ public class RLControllerStrategy extends AIStrategy {
             request.add("action_space", actionSpaceJson);
             request.addProperty("bot_name", botName);
             
-            // Determine endpoint
-            String endpoint = modelEndpoint != null 
-                    ? "/predict-action/" + modelEndpoint
-                    : "/predict-action/" + modelVersion;
+            // Determine endpoint - use format /predict-action-v{version}
+            String version = modelVersion != null ? modelVersion : "0.0";
+            String endpoint = "/predict-action-v" + version;
             
             // Make API call
             String response = APIClient.postRequest(endpoint, request.toString());
@@ -511,21 +510,31 @@ public class RLControllerStrategy extends AIStrategy {
     }
     
     /**
-     * Loads model endpoint from API
+     * Loads model endpoint from API based on bot name
      */
-    public void loadModelEndpoint() {
-        String response = APIClient.getRequest("/set-model");
-        if (response != null) {
-            try {
+    public void loadModelEndpoint(AIHelper helper) {
+        try {
+            // Get bot name
+            String botName = helper.getMinecraft().thePlayer != null 
+                    ? helper.getMinecraft().thePlayer.getName() 
+                    : "unknown";
+            
+            // GET from /set-model with bot_name query parameter
+            String response = APIClient.getRequest("/set-model?bot_name=" + botName);
+            if (response != null) {
                 JsonObject modelJson = jsonParser.parse(response).getAsJsonObject();
-                if (modelJson.has("endpoint")) {
-                    modelEndpoint = modelJson.get("endpoint").getAsString();
-                } else if (modelJson.has("version")) {
+                if (modelJson.has("version")) {
                     modelVersion = modelJson.get("version").getAsString();
+                    modelEndpoint = null; // Clear endpoint, use version
+                    AIChatController.addChatLine("Model version loaded: " + modelVersion);
+                } else if (modelJson.has("endpoint")) {
+                    modelEndpoint = modelJson.get("endpoint").getAsString();
+                    modelVersion = null;
+                    AIChatController.addChatLine("Model endpoint loaded: " + modelEndpoint);
                 }
-            } catch (Exception e) {
-                AIChatController.addChatLine("Error loading model endpoint: " + e.getMessage());
             }
+        } catch (Exception e) {
+            AIChatController.addChatLine("Error loading model endpoint: " + e.getMessage());
         }
     }
     
@@ -534,7 +543,7 @@ public class RLControllerStrategy extends AIStrategy {
      * @param helper AIHelper to get player name
      * @param events List of events (damage_dealt, damage_taken, good_aim, etc.)
      */
-    private void sendRewardEvents(AIHelper helper, JsonArray events) {
+    public void sendRewardEvents(AIHelper helper, JsonArray events) {
         try {
             String botName = helper.getMinecraft().thePlayer != null 
                     ? helper.getMinecraft().thePlayer.getName() 

@@ -140,6 +140,9 @@ public class AIController extends AIHelper implements IAIControllable {
     private final Object strategyDescrMutex = new Object();
 
     private AIStrategy requestedStrategy;
+    
+    // Store RL strategy for later activation with &run
+    private net.famzangl.minecraft.minebot.ai.strategy.cambium.RLControllerStrategy storedRLStrategy;
 
     private boolean nextPosIsPos2;
 
@@ -277,6 +280,20 @@ public class AIController extends AIHelper implements IAIControllable {
     public synchronized void addStrategy(AIStrategy strat) {
         strat.setActive(true, this);
         strategies.add(strat);
+    }
+    
+    /**
+     * Stores an RL Controller Strategy for later activation with &run command
+     */
+    public void setStoredRLStrategy(net.famzangl.minecraft.minebot.ai.strategy.cambium.RLControllerStrategy strategy) {
+        this.storedRLStrategy = strategy;
+    }
+    
+    /**
+     * Retrieves the stored RL Controller Strategy
+     */
+    public net.famzangl.minecraft.minebot.ai.strategy.cambium.RLControllerStrategy getStoredRLStrategy() {
+        return this.storedRLStrategy;
     }
 
     @SubscribeEvent

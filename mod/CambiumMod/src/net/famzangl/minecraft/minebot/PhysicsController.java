@@ -27,12 +27,12 @@ public class PhysicsController {
     private long lastTickTime = -1;
 
     // Movement & action keys
-    public boolean forward = true;
+    public boolean forward = false;
     public boolean back = false;
     public boolean left = false;
     public boolean right = false;
     public boolean jump = false;
-    public boolean sneak = true;
+    public boolean sneak = false;
     public boolean sprint = false;
     public boolean attack = false;
     public boolean useItem = false;

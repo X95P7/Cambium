@@ -1,0 +1,344 @@
+---- Minecraft Crash Report ----
+
+WARNING: coremods are present:
+  TickrateChanger (TickrateChanger-1.0.4.jar)
+Contact their authors BEFORE contacting forge
+
+// Ouch. That hurt :(
+
+Time: 1/4/26 9:42 PM
+Description: Watching Server
+
+java.lang.Error
+	at java.io.UnixFileSystem.rename0(Native Method)
+	at java.io.UnixFileSystem.rename(UnixFileSystem.java:278)
+	at java.io.File.renameTo(File.java:1436)
+	at net.minecraft.world.storage.SaveHandler.func_75753_a(SaveHandler.java:250)
+	at net.minecraft.server.management.ServerConfigurationManager.func_72391_b(ServerConfigurationManager.java:304)
+	at net.minecraft.server.management.ServerConfigurationManager.func_72389_g(ServerConfigurationManager.java:822)
+	at net.minecraft.server.MinecraftServer.func_71217_p(MinecraftServer.java:627)
+	at net.minecraft.server.MinecraftServer.run(MinecraftServer.java:481)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+A detailed walkthrough of the error, its code path and all known details is as follows:
+---------------------------------------------------------------------------------------
+
+-- Head --
+Stacktrace:
+	at java.io.UnixFileSystem.rename0(Native Method)
+	at java.io.UnixFileSystem.rename(UnixFileSystem.java:278)
+	at java.io.File.renameTo(File.java:1436)
+	at net.minecraft.world.storage.SaveHandler.func_75753_a(SaveHandler.java:250)
+	at net.minecraft.server.management.ServerConfigurationManager.func_72391_b(ServerConfigurationManager.java:304)
+	at net.minecraft.server.management.ServerConfigurationManager.func_72389_g(ServerConfigurationManager.java:822)
+	at net.minecraft.server.MinecraftServer.func_71217_p(MinecraftServer.java:627)
+
+-- Thread Dump --
+Details:
+	Threads: "Netty Epoll Server IO #22" Id=45 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #21" Id=44 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #20" Id=43 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #19" Id=42 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #18" Id=41 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #17" Id=40 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #16" Id=39 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #15" Id=38 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #14" Id=37 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #13" Id=36 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #12" Id=35 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #11" Id=34 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #10" Id=33 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #9" Id=32 RUNNABLE
+	at sun.reflect.Reflection.getCallerClass(Native Method)
+	at sun.reflect.GeneratedMethodAccessor2.invoke(Unknown Source)
+	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.lang.reflect.Method.invoke(Method.java:498)
+	at org.apache.logging.log4j.core.impl.ReflectiveCallerClassUtility.getCaller(ReflectiveCallerClassUtility.java:150)
+	at org.apache.logging.log4j.core.impl.ThrowableProxy.getCurrentStack(ThrowableProxy.java:333)
+	at org.apache.logging.log4j.core.impl.ThrowableProxy.<init>(ThrowableProxy.java:96)
+	at org.apache.logging.log4j.core.impl.Log4jLogEvent.<init>(Log4jLogEvent.java:114)
+	...
+
+
+"Netty Epoll Server IO #8" Id=31 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Chunk I/O Executor Thread-1" Id=51 WAITING on java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject@360f4e94
+	at sun.misc.Unsafe.park(Native Method)
+	-  waiting on java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject@360f4e94
+	at java.util.concurrent.locks.LockSupport.park(LockSupport.java:175)
+	at java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject.await(AbstractQueuedSynchronizer.java:2039)
+	at java.util.concurrent.LinkedBlockingQueue.take(LinkedBlockingQueue.java:442)
+	at java.util.concurrent.ThreadPoolExecutor.getTask(ThreadPoolExecutor.java:1074)
+	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1134)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #7" Id=30 RUNNABLE
+	at sun.reflect.Reflection.getCallerClass(Native Method)
+	at sun.reflect.GeneratedMethodAccessor2.invoke(Unknown Source)
+	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.lang.reflect.Method.invoke(Method.java:498)
+	at org.apache.logging.log4j.core.impl.ReflectiveCallerClassUtility.getCaller(ReflectiveCallerClassUtility.java:150)
+	at org.apache.logging.log4j.core.impl.ThrowableProxy.getCurrentStack(ThrowableProxy.java:333)
+	at org.apache.logging.log4j.core.impl.ThrowableProxy.<init>(ThrowableProxy.java:96)
+	at org.apache.logging.log4j.core.impl.Log4jLogEvent.<init>(Log4jLogEvent.java:114)
+	...
+
+
+"Netty Epoll Server IO #6" Id=29 RUNNABLE
+	at sun.reflect.Reflection.getCallerClass(Native Method)
+	at sun.reflect.GeneratedMethodAccessor2.invoke(Unknown Source)
+	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.lang.reflect.Method.invoke(Method.java:498)
+	at org.apache.logging.log4j.core.impl.ReflectiveCallerClassUtility.getCaller(ReflectiveCallerClassUtility.java:150)
+	at org.apache.logging.log4j.core.impl.ThrowableProxy.getCurrentStack(ThrowableProxy.java:333)
+	at org.apache.logging.log4j.core.impl.ThrowableProxy.<init>(ThrowableProxy.java:96)
+	at org.apache.logging.log4j.core.impl.Log4jLogEvent.<init>(Log4jLogEvent.java:114)
+	...
+
+
+"Netty Epoll Server IO #5" Id=28 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"File IO Thread" Id=50 RUNNABLE
+	at java.lang.Thread.sleep(Native Method)
+	at net.minecraft.world.storage.ThreadedFileIOBase.func_75736_b(SourceFile:51)
+	at net.minecraft.world.storage.ThreadedFileIOBase.run(SourceFile:30)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #4" Id=27 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Server Watchdog" Id=49 RUNNABLE
+	at sun.management.ThreadImpl.dumpThreads0(Native Method)
+	at sun.management.ThreadImpl.dumpAllThreads(ThreadImpl.java:496)
+	at sun.management.ThreadImpl.dumpAllThreads(ThreadImpl.java:484)
+	at net.minecraft.server.dedicated.ServerHangWatchdog.run(ServerHangWatchdog.java:46)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"RCON Listener #1" Id=48 RUNNABLE
+	at java.net.PlainSocketImpl.socketAccept(Native Method)
+	at java.net.AbstractPlainSocketImpl.accept(AbstractPlainSocketImpl.java:409)
+	at java.net.ServerSocket.implAccept(ServerSocket.java:560)
+	at java.net.ServerSocket.accept(ServerSocket.java:528)
+	at net.minecraft.network.rcon.RConThreadMain.run(SourceFile:65)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #3" Id=26 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #2" Id=25 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #1" Id=24 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"Netty Epoll Server IO #0" Id=23 RUNNABLE
+	at io.netty.channel.epoll.Native.epollWait(Native Method)
+	at io.netty.channel.epoll.EpollEventLoop.epollWait(EpollEventLoop.java:194)
+	at io.netty.channel.epoll.EpollEventLoop.run(EpollEventLoop.java:219)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:116)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+"DestroyJavaVM" Id=17 RUNNABLE
+
+
+"Server thread" Id=15 RUNNABLE
+	at java.io.UnixFileSystem.rename0(Native Method)
+	at java.io.UnixFileSystem.rename(UnixFileSystem.java:278)
+	at java.io.File.renameTo(File.java:1436)
+	at net.minecraft.world.storage.SaveHandler.func_75753_a(SaveHandler.java:250)
+	at net.minecraft.server.management.ServerConfigurationManager.func_72391_b(ServerConfigurationManager.java:304)
+	at net.minecraft.server.management.ServerConfigurationManager.func_72389_g(ServerConfigurationManager.java:822)
+	at net.minecraft.server.MinecraftServer.func_71217_p(MinecraftServer.java:627)
+	at net.minecraft.server.MinecraftServer.run(MinecraftServer.java:481)
+	...
+
+
+"Server Infinisleeper" Id=14 TIMED_WAITING
+	at java.lang.Thread.sleep(Native Method)
+	at net.minecraft.server.dedicated.DedicatedServer$1.run(DedicatedServer.java:69)
+
+
+"Snooper Timer" Id=13 TIMED_WAITING on java.util.TaskQueue@38c8a625
+	at java.lang.Object.wait(Native Method)
+	-  waiting on java.util.TaskQueue@38c8a625
+	at java.util.TimerThread.mainLoop(Timer.java:552)
+	at java.util.TimerThread.run(Timer.java:505)
+
+
+"Signal Dispatcher" Id=4 RUNNABLE
+
+
+"Finalizer" Id=3 WAITING on java.lang.ref.ReferenceQueue$Lock@3cf725e4
+	at java.lang.Object.wait(Native Method)
+	-  waiting on java.lang.ref.ReferenceQueue$Lock@3cf725e4
+	at java.lang.ref.ReferenceQueue.remove(ReferenceQueue.java:144)
+	at java.lang.ref.ReferenceQueue.remove(ReferenceQueue.java:165)
+	at java.lang.ref.Finalizer$FinalizerThread.run(Finalizer.java:216)
+
+
+"Reference Handler" Id=2 WAITING on java.lang.ref.Reference$Lock@79f5ac1e
+	at java.lang.Object.wait(Native Method)
+	-  waiting on java.lang.ref.Reference$Lock@79f5ac1e
+	at java.lang.Object.wait(Object.java:502)
+	at java.lang.ref.Reference.tryHandlePending(Reference.java:191)
+	at java.lang.ref.Reference$ReferenceHandler.run(Reference.java:153)
+
+
+
+Stacktrace:
+	at net.minecraft.server.dedicated.ServerHangWatchdog.run(ServerHangWatchdog.java:63)
+	at java.lang.Thread.run(Thread.java:748)
+
+-- System Details --
+Details:
+	Minecraft Version: 1.8.9
+	Operating System: Linux (amd64) version 6.6.87.2-microsoft-standard-WSL2
+	Java Version: 1.8.0_312, Temurin
+	Java VM Version: OpenJDK 64-Bit Server VM (mixed mode), Temurin
+	Memory: 7617517968 bytes (7264 MB) / 8232370176 bytes (7851 MB) up to 8232370176 bytes (7851 MB)
+	JVM Flags: 2 total; -Xmx8G -Xms8G
+	IntCache: cache: 0, tcache: 0, allocated: 0, tallocated: 0
+	FML: MCP 9.19 Powered by Forge 11.15.1.2318 5 mods loaded, 5 mods active
+	States: 'U' = Unloaded 'L' = Loaded 'C' = Constructed 'H' = Pre-initialized 'I' = Initialized 'J' = Post-initialized 'A' = Available 'D' = Disabled 'E' = Errored
+	UCHIJAAAA	mcp{9.19} [Minecraft Coder Pack] (minecraft.jar) 
+	UCHIJAAAA	FML{8.0.99.99} [Forge Mod Loader] (forge-1.8.9-11.15.1.2318-1.8.9-universal.jar) 
+	UCHIJAAAA	Forge{11.15.1.2318} [Minecraft Forge] (forge-1.8.9-11.15.1.2318-1.8.9-universal.jar) 
+	UCHIJAAAA	tickratechanger{1.0.4} [Tickrate Changer] (minecraft.jar) 
+	UCHIJAAAA	tickfreeze{1.0} [tickfreeze] (modid-1.0.jar) 
+	Loaded coremods (and transformers): 
+TickrateChanger (TickrateChanger-1.0.4.jar)
+  me.guichaguri.tickratechanger.TickrateTransformer
+	Profiler Position: N/A (disabled)
+	Player Count: 3 / 20; [EntityPlayerMP['Xylim'/3, l='world', x=-3.39, y=19.31, z=40.46], EntityPlayerMP['Bot2'/1, l='world', x=4.50, y=17.00, z=30.78], EntityPlayerMP['Bot1'/0, l='world', x=4.50, y=17.00, z=48.70]]
+	Is Modded: Definitely; Server brand changed to 'fml,forge'
+	Type: Dedicated Server (map_server.txt)

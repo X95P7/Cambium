@@ -99,11 +99,13 @@ public class APIClient {
             is.close();
             
             if (responseCode != HttpURLConnection.HTTP_OK) {
+                AIChatController.addChatLine("API GET Error: " + responseCode + " - " + response.toString());
                 return null;
             }
             
             return response.toString();
         } catch (Exception e) {
+            AIChatController.addChatLine("API GET Request Error: " + e.getMessage());
             e.printStackTrace();
             return null;
         }

@@ -21,6 +21,7 @@ import java.net.URISyntaxException;
 import net.famzangl.minecraft.minebot.ai.AIController;
 import net.famzangl.minecraft.minebot.ai.ChatListener;
 import net.famzangl.minecraft.minebot.ai.DeathListener;
+import net.famzangl.minecraft.minebot.ai.RewardListener;
 import net.famzangl.minecraft.minebot.ai.path.world.BlockBoundsCache;
 import net.famzangl.minecraft.minebot.ai.strategy.cambium.LeftClickStrategy;
 import net.minecraftforge.client.event.ClientChatReceivedEvent;
@@ -68,6 +69,7 @@ public class MinebotMod {
 		controller.getMinecraft().gameSettings.pauseOnLostFocus = false;
 		MinecraftForge.EVENT_BUS.register(new ChatListener());
 		MinecraftForge.EVENT_BUS.register(new DeathListener());
+		MinecraftForge.EVENT_BUS.register(new RewardListener());
 	}
 
 	public static String getVersion() {

@@ -16,6 +16,7 @@ services:
       - ./server:/data
     restart: unless-stopped
 
+
   backend:
     build: ./backend
     ports:
@@ -26,6 +27,13 @@ services:
       - mc-forge
     volumes:
       - /var/run/docker.sock:/v
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+        reservations:
+          cpus: '3.0' 
+
 
   headlessmc1:
     build: ./headlessmc
@@ -39,7 +47,7 @@ services:
       - SERVER=mc-forge:25565
       - USERNAME=Bot1
       # Use virtual framebuffer (xvfb) for headless rendering (set to false to disable)
-      - USE_XVFB=true
+      - USE_XVFB=false
     depends_on:
       - mc-forge
     volumes:
@@ -47,6 +55,7 @@ services:
       - headlessmc-data:/opt/hmc/HeadlessMC
       # Separate game directory for each bot
       - headlessmc1-gamedir:/opt/hmc/run
+
 
   headlessmc2:
     build: ./headlessmc
@@ -60,7 +69,7 @@ services:
       - SERVER=mc-forge:25565
       - USERNAME=Bot2
       # Use virtual framebuffer (xvfb) for headless rendering (set to false to disable)
-      - USE_XVFB=true
+      - USE_XVFB=false
     depends_on:
       - mc-forge
     volumes:
@@ -71,6 +80,9 @@ services:
 
 
 
+
+
+
   #mineflayer-bots:
    # build: ./mineflayer  # Ensure this is pointing to the correct directory with your bot's Dockerfile
    # environment:
@@ -78,6 +90,7 @@ services:
     #depends_on:
     #  - mc-forge
     #entrypoint: ["sh", "-c", "echo 'Waiting for Minecraft server to start...';until nc -z -v -w30 mc-forge 25565; do sleep 5; done;echo 'Port 25565 is open, waiting for server to be fully ready...';sleep 3;exec sh start.sh"]
+
 
 volumes:
   headlessmc-data:
