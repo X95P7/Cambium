@@ -73,6 +73,7 @@ public class RewardListener {
             }
             events.add(damageEvent);
             
+            System.out.println("[RewardListener] Bot " + botName + " took " + damage + " damage");
             sendRewardEvents(events);
             
             // Update last health
@@ -112,6 +113,7 @@ public class RewardListener {
                 damageEvent.addProperty("target", entity.getName());
                 events.add(damageEvent);
                 
+                System.out.println("[RewardListener] Bot " + botName + " dealt " + damage + " damage (" + (damagePercentage * 100) + "%) to " + entity.getName());
                 sendRewardEvents(events);
                 
                 // Track target health for future reference
@@ -242,6 +244,8 @@ public class RewardListener {
                 aimEvent.addProperty("distance", closestDistance);
                 events.add(aimEvent);
                 
+                // Debug log (commented out to reduce spam - uncomment if needed)
+                // System.out.println("[RewardListener] Good aim detected: score=" + aimScore + ", yaw_diff=" + yawDiff + ", pitch_diff=" + pitchDiff);
                 sendRewardEvents(events);
             }
         }
@@ -280,6 +284,12 @@ public class RewardListener {
         try {
             Minecraft mc = Minecraft.getMinecraft();
             if (mc.thePlayer == null) {
+                System.err.println("[RewardListener] Cannot send rewards: thePlayer is null");
+                return;
+            }
+            
+            if (events == null || events.size() == 0) {
+                System.err.println("[RewardListener] Cannot send rewards: events array is empty");
                 return;
             }
             
@@ -294,11 +304,25 @@ public class RewardListener {
             request.add("events", events);
             request.add("current_state", currentState);
             
-            // Send to API
-            APIClient.postRequest("/add-reward/", request.toString());
+            String requestJson = request.toString();
+            System.out.println("[RewardListener] Sending " + events.size() + " reward event(s) for " + botName + " to /add-reward/");
+            
+            // Send to API and check response
+            String response = APIClient.postRequest("/add-reward/", requestJson);
+            
+            if (response == null) {
+                // Log error - API request failed
+                System.err.println("[RewardListener] FAILED to send reward events for " + botName + ". Response was null. Check API connection.");
+                AIChatController.addChatLine("Reward API Error: Request failed for " + botName);
+            } else {
+                // Success - log for debugging
+                System.out.println("[RewardListener] Successfully sent " + events.size() + " reward event(s) for " + botName + ". Response: " + response);
+            }
         } catch (Exception e) {
-            // Silently fail - reward tracking is not critical
+            // Log error instead of silently failing
+            System.err.println("[RewardListener] Exception sending reward events: " + e.getMessage());
             e.printStackTrace();
+            AIChatController.addChatLine("Reward Exception: " + e.getMessage());
         }
     }
     

@@ -136,6 +136,10 @@ except Exception as e:
 bot_states = {}  # bot_name -> current state
 bot_events = {}  # bot_name -> list of events
 
+# Reward event logging - stores recent reward events per bot for frontend display
+bot_reward_events = {}  # bot_name -> list of reward event dicts with timestamp
+MAX_REWARD_EVENTS_PER_BOT = 100  # Keep last 100 reward events per bot
+
 # Tick counting for backprop
 bot_tick_counts = {}  # bot_name -> tick count
 BACKPROP_INTERVAL = 100  # Train every 100 ticks
@@ -175,117 +179,7 @@ def calculate_auto_rewards(bot_name: str, observation: Dict) -> List[Dict]:
     Gives rewards for looking at enemies, being close to enemies, etc.
     Returns a list of reward events.
     """
-    events = []
-    
-    if not observation:
-        return events
-    
-    player = observation.get('player', {})
-    entities = observation.get('entities', [])
-    
-    if not player or not entities:
-        return events
-    
-    player_yaw = normalize_yaw(player.get('yaw', 0))
-    player_pitch = player.get('pitch', 0)
-    player_health = player.get('health', 0)
-    
-    # Find closest enemy player
-    closest_enemy = None
-    closest_distance = float('inf')
-    
-    for entity in entities:
-        if entity.get('isPlayer', False) and entity.get('health', 0) > 0:
-            rel_x = entity.get('relativeX', 0)
-            rel_y = entity.get('relativeY', 0)
-            rel_z = entity.get('relativeZ', 0)
-            distance = (rel_x**2 + rel_y**2 + rel_z**2)**0.5
-            
-            if distance < closest_distance:
-                closest_distance = distance
-                closest_enemy = {
-                    'relativeX': rel_x,
-                    'relativeY': rel_y,
-                    'relativeZ': rel_z,
-                    'distance': distance
-                }
-    
-    if closest_enemy:
-        # Calculate angle to enemy
-        target_yaw = normalize_yaw(np.arctan2(closest_enemy['relativeX'], closest_enemy['relativeZ']) * 180.0 / np.pi)
-        target_pitch = normalize_yaw(np.arctan2(-closest_enemy['relativeY'], (closest_enemy['relativeX']**2 + closest_enemy['relativeZ']**2)**0.5) * 180.0 / np.pi)
-        
-        # Calculate angle differences
-        yaw_diff = abs(normalize_yaw(player_yaw - target_yaw))
-        pitch_diff = abs(player_pitch - target_pitch)
-        
-        # Reward for looking at enemy (percentage-based, more generous)
-        # Perfect aim (within 5 degrees) = 1.0 reward
-        # Within 10 degrees = 0.8 reward
-        # Within 20 degrees = 0.5 reward
-        # Within 45 degrees = 0.2 reward
-        # Within 90 degrees = 0.05 reward
-        
-        max_angle = max(yaw_diff, pitch_diff)
-        if max_angle < 5:
-            aim_score = 1.0
-        elif max_angle < 10:
-            aim_score = 0.8
-        elif max_angle < 20:
-            aim_score = 0.5
-        elif max_angle < 45:
-            aim_score = 0.2
-        elif max_angle < 90:
-            aim_score = 0.05
-        else:
-            aim_score = 0.0
-        
-        if aim_score > 0:
-            events.append({
-                "type": "good_aim",
-                "amount": aim_score,
-                "yaw_diff": yaw_diff,
-                "pitch_diff": pitch_diff,
-                "distance": closest_enemy['distance']
-            })
-        
-        # Reward for being close to enemy (encourages engagement)
-        if closest_enemy['distance'] < 5:
-            proximity_reward = (5 - closest_enemy['distance']) / 5.0 * 0.1  # Max 0.1 reward
-            events.append({
-                "type": "proximity",
-                "amount": proximity_reward,
-                "distance": closest_enemy['distance']
-            })
-    
-    # Small survival reward (encourages staying alive)
-    if player_health > 0:
-        events.append({
-            "type": "survival",
-            "amount": 0.01  # Small constant reward for staying alive
-        })
-    
-    # Reward for exploring different yaw angles (encourages yaw between -30 and -150)
-    # This helps prevent the bot from getting stuck at 0 or -180 degrees
-    if -150 <= player_yaw <= -30:
-        # Calculate reward based on distance from center (-90 degrees)
-        # Maximum reward (0.05) at -90 degrees, decreasing towards edges
-        center_yaw = -90.0
-        distance_from_center = abs(player_yaw - center_yaw)
-        max_distance = 60.0  # Distance from center to edge (-30 to -90 or -90 to -150)
-        
-        # Linear decay from center to edge (1.0 at center, 0.0 at edge)
-        yaw_exploration_score = 1.0 - (distance_from_center / max_distance)
-        yaw_exploration_reward = yaw_exploration_score * 0.05  # Max 0.05 reward
-        
-        events.append({
-            "type": "yaw_exploration",
-            "amount": yaw_exploration_reward,
-            "yaw": player_yaw,
-            "distance_from_center": distance_from_center
-        })
-    
-    return events
+    #too much clutter from this one
 
 # Use multiprocessing for running the RCON command in a separate process
 def mc_command(command: str):
@@ -429,9 +323,20 @@ async def trigger_backprop(bot_name: str = None):
         if fast_rl_agent:
             bot_rewards_before = {name: score for name, score in fast_rl_agent.bot_scores.items()}
         
-        # Train the model
+        # Check action diversity (how many unique actions in the batch)
+        if agent.actions:
+            unique_actions = len(set(agent.actions))
+            action_diversity = unique_actions / len(agent.actions) if agent.actions else 0.0
+            print(f"Training with {total_samples} samples, rewards: min={min(agent.rewards) if agent.rewards else 0:.4f}, "
+                  f"max={max(agent.rewards) if agent.rewards else 0:.4f}, "
+                  f"mean={avg_reward_before:.4f}, sum={total_rewards_before:.4f}, "
+                  f"action_diversity={action_diversity:.2%} ({unique_actions}/{len(agent.actions)} unique)")
+        else:
+            print(f"Training with {total_samples} samples, but no actions recorded!")
+        
         stats = agent.train(batch_size=64, epochs=4)
-        print(f"Backprop completed for {bot_name or 'all bots'}: {stats}")
+        print(f"Backprop completed for {bot_name or 'all bots'}: loss={stats.get('loss', 0):.6f}, "
+              f"policy_loss={stats.get('policy_loss', 0):.6f}, entropy={stats.get('entropy', 0):.4f}")
         
         # Calculate statistics after training
         # Note: stats["score"] is the sum of rewards before clearing, which is what we want
@@ -539,6 +444,23 @@ async def predict_action(version: str, request: Request):
     # Auto-rewards supplement mod-sent rewards (e.g., mod sends damage_dealt, we add good_aim)
     auto_reward_events = calculate_auto_rewards(bot_name, observation)
     if auto_reward_events:
+        # Log auto-calculated rewards for frontend display
+        if bot_name not in bot_reward_events:
+            bot_reward_events[bot_name] = []
+        
+        for event in auto_reward_events:
+            event_log = {
+                "timestamp": datetime.now().isoformat(),
+                "bot_name": bot_name,
+                "event": event.copy(),
+                "source": "auto_calculated"  # Mark as auto-calculated
+            }
+            bot_reward_events[bot_name].append(event_log)
+            
+            # Keep only the most recent events
+            if len(bot_reward_events[bot_name]) > MAX_REWARD_EVENTS_PER_BOT:
+                bot_reward_events[bot_name] = bot_reward_events[bot_name][-MAX_REWARD_EVENTS_PER_BOT:]
+        
         agent = fast_rl_agent if fast_rl_agent else ppo_agent
         if agent:
             # Add auto-rewards - these supplement mod-sent rewards
@@ -757,22 +679,50 @@ async def death(request: Request):
     
     # Add reward event for death (negative reward)
     if name in bot_states:
+        death_event = {"type": "death", "amount": -1.0}
+        
+        # Log death event for frontend display
+        if name not in bot_reward_events:
+            bot_reward_events[name] = []
+        bot_reward_events[name].append({
+            "timestamp": datetime.now().isoformat(),
+            "bot_name": name,
+            "event": death_event.copy(),
+            "source": "death_endpoint"
+        })
+        if len(bot_reward_events[name]) > MAX_REWARD_EVENTS_PER_BOT:
+            bot_reward_events[name] = bot_reward_events[name][-MAX_REWARD_EVENTS_PER_BOT:]
+        
         if fast_rl_agent:
-            fast_rl_agent.add_reward(name, bot_states[name], [{"type": "death", "amount": -1.0}])
+            fast_rl_agent.add_reward(name, bot_states[name], [death_event])
             fast_rl_agent.add_done(True)
         elif ppo_agent:
-            ppo_agent.add_reward(name, bot_states[name], [{"type": "death", "amount": -1.0}])
+            ppo_agent.add_reward(name, bot_states[name], [death_event])
             ppo_agent.add_done(True)
     
     # If bot has a pair, give winning reward to the pair
     if hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
         pair_name = bot.pair.name
         if pair_name in bot_states:
+            won_duel_event = {"type": "won_duel", "amount": 10.0}
+            
+            # Log won_duel event for frontend display
+            if pair_name not in bot_reward_events:
+                bot_reward_events[pair_name] = []
+            bot_reward_events[pair_name].append({
+                "timestamp": datetime.now().isoformat(),
+                "bot_name": pair_name,
+                "event": won_duel_event.copy(),
+                "source": "death_endpoint"
+            })
+            if len(bot_reward_events[pair_name]) > MAX_REWARD_EVENTS_PER_BOT:
+                bot_reward_events[pair_name] = bot_reward_events[pair_name][-MAX_REWARD_EVENTS_PER_BOT:]
+            
             if fast_rl_agent:
-                fast_rl_agent.add_reward(pair_name, bot_states[pair_name], [{"type": "won_duel"}])
+                fast_rl_agent.add_reward(pair_name, bot_states[pair_name], [won_duel_event])
                 fast_rl_agent.add_done(True)
             elif ppo_agent:
-                ppo_agent.add_reward(pair_name, bot_states[pair_name], [{"type": "won_duel"}])
+                ppo_agent.add_reward(pair_name, bot_states[pair_name], [won_duel_event])
                 ppo_agent.add_done(True)
     
     # Trigger backprop when duel ends (asynchronously, don't block)
@@ -1005,6 +955,23 @@ async def add_reward(request: Request):
             bot_states[bot_name]["latest_observation"] = current_state
             bot_states[bot_name]["latest_observation_time"] = datetime.now().isoformat()
     
+    # Log reward events for frontend display
+    if bot_name not in bot_reward_events:
+        bot_reward_events[bot_name] = []
+    
+    # Add each event with timestamp
+    for event in events:
+        event_log = {
+            "timestamp": datetime.now().isoformat(),
+            "bot_name": bot_name,
+            "event": event.copy()  # Copy to avoid reference issues
+        }
+        bot_reward_events[bot_name].append(event_log)
+        
+        # Keep only the most recent events
+        if len(bot_reward_events[bot_name]) > MAX_REWARD_EVENTS_PER_BOT:
+            bot_reward_events[bot_name] = bot_reward_events[bot_name][-MAX_REWARD_EVENTS_PER_BOT:]
+    
     # Add reward to agent
     agent = fast_rl_agent if fast_rl_agent else ppo_agent
     if agent and events:
@@ -1175,6 +1142,32 @@ async def get_training_logs():
         "total_logs": len(training_logs),
         "backprop_interval": BACKPROP_INTERVAL
     }
+
+@app.get("/reward-events")
+async def get_reward_events(bot_name: str = None):
+    """
+    Returns reward events for a specific bot or all bots.
+    Shows full JSON output of all reward events received.
+    """
+    if bot_name:
+        # Return events for specific bot
+        events = bot_reward_events.get(bot_name, [])
+        return {
+            "status": "success",
+            "bot_name": bot_name,
+            "events": events,
+            "total_events": len(events)
+        }
+    else:
+        # Return events for all bots
+        all_events = {}
+        for name, events in bot_reward_events.items():
+            all_events[name] = events
+        return {
+            "status": "success",
+            "bots": all_events,
+            "total_bots": len(all_events)
+        }
 
 @app.get("/reward-progression")
 async def get_reward_progression():

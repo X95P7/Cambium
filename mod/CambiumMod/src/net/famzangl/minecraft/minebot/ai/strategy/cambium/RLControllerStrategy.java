@@ -33,7 +33,7 @@ public class RLControllerStrategy extends AIStrategy {
     private PhysicsController physicsController;
     private ActionSpaceConfig actionConfig;
     private ObservationSpaceConfig observationConfig;
-    private String modelVersion = "v1";
+    private String modelVersion = "0.1";
     private String modelEndpoint = null;
     
     // Tick rate management

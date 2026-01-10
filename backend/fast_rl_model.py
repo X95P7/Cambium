@@ -8,31 +8,44 @@ import numpy as np
 from typing import Dict, List, Tuple
 
 class FastLinearPolicy(nn.Module):
-    """Single linear layer for ultra-fast inference"""
-    def __init__(self, observation_dim: int, action_dim: int):
+    """2-layer MLP with ReLU for better expressiveness while maintaining fast inference"""
+    def __init__(self, observation_dim: int, action_dim: int, hidden_dim: int = 256):
         super(FastLinearPolicy, self).__init__()
-        self.linear = nn.Linear(observation_dim, action_dim)
+        self.hidden_dim = hidden_dim
+        self.fc1 = nn.Linear(observation_dim, hidden_dim)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_dim, action_dim)
 
     def forward(self, observation: torch.Tensor) -> torch.Tensor:
-        return self.linear(observation)
+        x = self.fc1(observation)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
 
     def get_action(self, observation: np.ndarray, deterministic: bool = False) -> Tuple[int, float]:
         with torch.no_grad():
             observation_tensor = torch.FloatTensor(observation).unsqueeze(0)
             action_logits = self.forward(observation_tensor)
-            action_logits_np = action_logits.numpy()[0]
-            action = int(np.argmax(action_logits_np))  # Convert numpy.int64 to Python int
+            action_probs = torch.nn.functional.softmax(action_logits, dim=-1)
+            
+            if deterministic:
+                # Use argmax for deterministic actions
+                action = int(torch.argmax(action_probs, dim=-1).item())
+            else:
+                # Sample from the probability distribution for exploration
+                action_dist = torch.distributions.Categorical(action_probs)
+                action = int(action_dist.sample().item())
         return action, 0.0
 
 
 class FastRLAgent:
     """Fast RL Agent with optimized observation processing"""
     
-    def __init__(self, observation_dim: int, action_dim: int, device: str = 'cpu'):
+    def __init__(self, observation_dim: int, action_dim: int, device: str = 'cpu', hidden_dim: int = 256):
         self.observation_dim = observation_dim
         self.action_dim = action_dim
         self.device = device
-        self.policy = FastLinearPolicy(observation_dim, action_dim).to(device)
+        self.policy = FastLinearPolicy(observation_dim, action_dim, hidden_dim=hidden_dim).to(device)
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=1e-3)
         
         # Training buffers
@@ -146,8 +159,8 @@ class FastRLAgent:
         pitch_bin = int(remaining % pitch_bins)
         
         # Convert bins to angles - ensure float
-        yaw = float((yaw_bin / yaw_bins) * 360.0 - 180.0)
-        pitch = float((pitch_bin / pitch_bins) * 180.0 - 90.0)
+        yaw = float((yaw_bin / yaw_bins) * 45.0 - 22.5)
+        pitch = float((pitch_bin / pitch_bins) * 45.0 - 22.5)
         
         return {
             "movement": movement,
@@ -264,20 +277,45 @@ class FastRLAgent:
                 "message": f"Buffer size mismatch: obs={len(obs_tensor)}, actions={len(actions_tensor)}, rewards={len(rewards_tensor)}"
             }
         
-        # Simple policy gradient
+        # Policy gradient with reward normalization and entropy bonus
         self.optimizer.zero_grad()
         action_logits = self.policy(obs_tensor)
         action_probs = torch.nn.functional.softmax(action_logits, dim=-1)
         action_dist = torch.distributions.Categorical(action_probs)
         
         log_probs = action_dist.log_prob(actions_tensor)
-        loss = -(log_probs * rewards_tensor).mean()
+        
+        # Normalize rewards (subtract mean) to reduce variance and improve learning
+        # This centers rewards around 0, which helps policy gradient
+        rewards_mean = rewards_tensor.mean()
+        rewards_normalized = rewards_tensor - rewards_mean
+        
+        # Policy gradient loss: maximize log_prob * reward
+        policy_loss = -(log_probs * rewards_normalized).mean()
+        
+        # Add entropy bonus to encourage exploration (prevent getting stuck)
+        entropy = action_dist.entropy().mean()
+        entropy_bonus = 0.01  # Small bonus to encourage exploration
+        entropy_loss = -entropy_bonus * entropy
+        
+        # Total loss
+        loss = policy_loss + entropy_loss
         
         loss.backward()
+        
+        # Clip gradients to prevent exploding gradients
+        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.0)
+        
         self.optimizer.step()
         
         self.last_loss = loss.item()
         self.last_score = rewards_tensor.sum().item()
+        
+        # Log additional info for debugging
+        print(f"Training stats: loss={loss.item():.6f}, policy_loss={policy_loss.item():.6f}, "
+              f"entropy={entropy.item():.4f}, reward_mean={rewards_mean.item():.4f}, "
+              f"reward_std={rewards_tensor.std().item():.4f}, "
+              f"min_reward={rewards_tensor.min().item():.4f}, max_reward={rewards_tensor.max().item():.4f}")
         
         # Clear buffers
         self.observations.clear()
@@ -288,6 +326,10 @@ class FastRLAgent:
         return {
             "status": "success",
             "loss": self.last_loss,
+            "policy_loss": policy_loss.item(),
+            "entropy": entropy.item(),
+            "reward_mean": rewards_mean.item(),
+            "reward_std": rewards_tensor.std().item(),
             "score": self.last_score,
             "samples_trained": len(obs_tensor)
         }
