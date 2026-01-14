@@ -93,7 +93,6 @@
             border-radius: 15px;
             padding: 25px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            margin-bottom: 2vh;
         }
 
         .card h2 {
@@ -281,17 +280,6 @@
 
         <div class="stats-grid" id="statsGrid"></div>
 
-        <!-- Master Bot Selector -->
-        <div class="card" style="margin-bottom: 20px;">
-            <h2>🎯 Select Bot to Monitor</h2>
-            <div style="margin-bottom: 15px;">
-                <label for="masterBotSelector" style="display: block; margin-bottom: 8px; font-weight: 600; color: #667eea;">Bot Selection (filters all bot-specific views below):</label>
-                <select id="masterBotSelector" style="width: 100%; padding: 10px; border-radius: 8px; border: 2px solid #e5e7eb; font-size: 1em;" onchange="onMasterBotChange()">
-                    <option value="">-- All Bots (Global View) --</option>
-                </select>
-            </div>
-        </div>
-
         <div class="grid">
             <div class="card">
                 <h2>🤖 Bots Status</h2>
@@ -365,8 +353,8 @@
             </div>
         </div>
 
-        <div class="card">
-            <h2>📋 Training Logs (Every 100 Ticks)</h2>
+            <div class="card">
+                <h2>📋 Training Logs (Every 100 Ticks)</h2>
             <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
                 <button class="refresh-btn" onclick="clearLogs()" style="background: #ef4444;">Clear Logs</button>
                 <span style="color: #667eea; font-weight: 600;" id="logCount">0 logs</span>
@@ -378,19 +366,14 @@
 
         <div class="card">
             <h2>👁️ Bot Observation Viewer</h2>
+            <div style="margin-bottom: 15px;">
+                <label for="botSelector" style="display: block; margin-bottom: 8px; font-weight: 600; color: #667eea;">Select Bot:</label>
+                <select id="botSelector" style="width: 100%; padding: 10px; border-radius: 8px; border: 2px solid #e5e7eb; font-size: 1em;" onchange="updateBotObservation()">
+                    <option value="">-- Select a bot --</option>
+                </select>
+            </div>
             <div id="observationViewer" style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; max-height: 500px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 0.85em;">
-                <div style="text-align: center; padding: 20px; color: #667eea;">Select a bot from the dropdown above to view its observation data</div>
-            </div>
-        </div>
-
-        <div class="card">
-            <h2>🎁 Reward Events Log</h2>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
-                <button class="refresh-btn" onclick="updateRewardEvents()" style="background: #667eea;">🔄 Refresh</button>
-                <span style="color: #667eea; font-weight: 600;" id="rewardEventCount">0 events</span>
-            </div>
-            <div id="rewardEventsViewer" style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; max-height: 600px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 0.85em;">
-                <div style="text-align: center; padding: 20px; color: #667eea;">Select a bot from the dropdown above to view its reward events</div>
+                <div style="text-align: center; padding: 20px; color: #667eea;">Select a bot to view its observation data</div>
             </div>
         </div>
 
@@ -681,6 +664,55 @@
             return html;
         }
 
+        async function updateBotObservation() {
+            const selector = document.getElementById('botSelector');
+            const viewer = document.getElementById('observationViewer');
+            const botName = selector.value;
+            
+            if (!botName) {
+                viewer.innerHTML = '<div style="text-align: center; padding: 20px; color: #667eea;">Select a bot to view its observation data</div>';
+                return;
+            }
+            
+            try {
+                const data = await fetchBotObservation(botName);
+                if (data.status === 'success') {
+                    viewer.innerHTML = `
+                        <div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 2px solid #667eea;">
+                            <strong style="color: #667eea;">Bot: ${data.bot_name}</strong><br>
+                            <span style="color: #f59e0b;">Tick Count: ${data.tick_count}</span><br>
+                            <span style="color: #10b981;">Last Updated: ${new Date(data.timestamp).toLocaleString()}</span>
+                        </div>
+                        ${formatObservation(data.observation)}
+                    `;
+                } else {
+                    viewer.innerHTML = `<div style="color: #ef4444;">${data.message || 'Error loading observation'}</div>`;
+                }
+            } catch (error) {
+                viewer.innerHTML = `<div style="color: #ef4444;">Error: ${error.message}</div>`;
+            }
+        }
+
+        function updateBotSelector(bots) {
+            const selector = document.getElementById('botSelector');
+            const currentValue = selector.value;
+            
+            // Clear and repopulate
+            selector.innerHTML = '<option value="">-- Select a bot --</option>';
+            
+            bots.forEach(bot => {
+                const option = document.createElement('option');
+                option.value = bot.name;
+                option.textContent = `${bot.name} (${bot.status})`;
+                selector.appendChild(option);
+            });
+            
+            // Restore selection if still valid
+            if (currentValue && bots.some(b => b.name === currentValue)) {
+                selector.value = currentValue;
+            }
+        }
+
         async function fetchBotObservation(botName) {
             try {
                 const response = await fetch(`${API_BASE}/bot-observation/${botName}`);
@@ -757,11 +789,12 @@
         }
 
         async function updateBotObservation() {
+            const selector = document.getElementById('botSelector');
             const viewer = document.getElementById('observationViewer');
-            const botName = getSelectedBot();
+            const botName = selector.value;
             
             if (!botName) {
-                viewer.innerHTML = '<div style="text-align: center; padding: 20px; color: #667eea;">Select a bot from the dropdown above to view its observation data</div>';
+                viewer.innerHTML = '<div style="text-align: center; padding: 20px; color: #667eea;">Select a bot to view its observation data</div>';
                 return;
             }
             
@@ -781,6 +814,26 @@
                 }
             } catch (error) {
                 viewer.innerHTML = `<div style="color: #ef4444;">Error: ${error.message}</div>`;
+            }
+        }
+
+        function updateBotSelector(bots) {
+            const selector = document.getElementById('botSelector');
+            const currentValue = selector.value;
+            
+            // Clear and repopulate
+            selector.innerHTML = '<option value="">-- Select a bot --</option>';
+            
+            bots.forEach(bot => {
+                const option = document.createElement('option');
+                option.value = bot.name;
+                option.textContent = `${bot.name} (${bot.status})`;
+                selector.appendChild(option);
+            });
+            
+            // Restore selection if still valid
+            if (currentValue && bots.some(b => b.name === currentValue)) {
+                selector.value = currentValue;
             }
         }
 
@@ -896,29 +949,9 @@
         function updateRewardChart(progression) {
             if (!progression || progression.length === 0) return;
 
-            const botName = getSelectedBot();
-            let filteredProgression = progression;
-            
-            // Filter by bot if one is selected
-            if (botName) {
-                filteredProgression = progression.filter(p => {
-                    return p.bot_rewards && p.bot_rewards[botName] !== undefined;
-                });
-            }
-
-            if (filteredProgression.length === 0) {
-                rewardChart.data.labels = [];
-                rewardChart.data.datasets[0].data = [];
-                rewardChart.data.datasets[1].data = [];
-                rewardChart.update('none');
-                return;
-            }
-
-            const intervals = filteredProgression.map(p => `Interval ${p.interval}`);
-            const totalRewards = botName 
-                ? filteredProgression.map(p => p.bot_rewards[botName] || 0)
-                : filteredProgression.map(p => p.total_rewards);
-            const avgRewards = filteredProgression.map(p => p.avg_reward);
+            const intervals = progression.map(p => `Interval ${p.interval}`);
+            const totalRewards = progression.map(p => p.total_rewards);
+            const avgRewards = progression.map(p => p.avg_reward);
 
             rewardChart.data.labels = intervals;
             rewardChart.data.datasets[0].data = totalRewards;
@@ -929,25 +962,8 @@
         function updateLossChart(progression) {
             if (!progression || progression.length === 0) return;
 
-            const botName = getSelectedBot();
-            let filteredProgression = progression;
-            
-            // Filter by bot if one is selected (loss is global, but we can still filter intervals)
-            if (botName) {
-                filteredProgression = progression.filter(p => {
-                    return p.bot_rewards && p.bot_rewards[botName] !== undefined;
-                });
-            }
-
-            if (filteredProgression.length === 0) {
-                lossChart.data.labels = [];
-                lossChart.data.datasets[0].data = [];
-                lossChart.update('none');
-                return;
-            }
-
-            const intervals = filteredProgression.map(p => `Interval ${p.interval}`);
-            const losses = filteredProgression.map(p => p.loss);
+            const intervals = progression.map(p => `Interval ${p.interval}`);
+            const losses = progression.map(p => p.loss);
 
             lossChart.data.labels = intervals;
             lossChart.data.datasets[0].data = losses;
@@ -957,7 +973,6 @@
         function updateLogConsole(logs) {
             const consoleDiv = document.getElementById('logConsole');
             const countSpan = document.getElementById('logCount');
-            const botName = getSelectedBot();
             
             if (!logs || logs.length === 0) {
                 consoleDiv.innerHTML = '<div class="log-entry">No training logs yet. Waiting for first 100-tick interval...</div>';
@@ -965,38 +980,20 @@
                 return;
             }
 
-            // Filter logs by bot if one is selected
-            let filteredLogs = logs;
-            if (botName) {
-                filteredLogs = logs.filter(log => {
-                    return log.bot_statistics && log.bot_statistics[botName] !== undefined;
-                });
-            }
+            countSpan.textContent = `${logs.length} logs`;
 
-            countSpan.textContent = `${filteredLogs.length} logs${botName ? ` (${botName})` : ''}`;
-
-            // Show last 20 logs (oldest first, newest at bottom)
-            const recentLogs = filteredLogs.slice(-20);
-            const totalLogs = filteredLogs.length;
-            const startInterval = totalLogs - recentLogs.length + 1;
+            // Show last 20 logs (most recent first)
+            const recentLogs = logs.slice(-20).reverse();
+            const totalLogs = logs.length;
             consoleDiv.innerHTML = recentLogs.map((log, idx) => {
                 const time = new Date(log.timestamp).toLocaleTimeString();
                 const stats = log.training_stats;
                 const botStats = log.bot_statistics;
-                const intervalNum = startInterval + idx; // Calculate interval number correctly (oldest to newest)
+                const intervalNum = totalLogs - idx; // Calculate interval number correctly
                 
                 let botInfo = '';
-                if (botName) {
-                    // Show only selected bot
-                    if (botStats[botName]) {
-                        const botData = botStats[botName];
-                        botInfo = `<span class="log-bot">${botName}</span>: score=<span class="log-value">${botData.score.toFixed(2)}</span>, ticks=<span class="log-value">${botData.tick_count}</span>`;
-                    }
-                } else {
-                    // Show all bots
-                    for (const [name, botData] of Object.entries(botStats)) {
-                        botInfo += `<span class="log-bot">${name}</span>: score=<span class="log-value">${botData.score.toFixed(2)}</span>, ticks=<span class="log-value">${botData.tick_count}</span>; `;
-                    }
+                for (const [botName, botData] of Object.entries(botStats)) {
+                    botInfo += `<span class="log-bot">${botName}</span>: score=<span class="log-value">${botData.score.toFixed(2)}</span>, ticks=<span class="log-value">${botData.tick_count}</span>; `;
                 }
                 
                 return `
@@ -1015,10 +1012,8 @@
                 `;
             }).join('');
             
-            // Auto-scroll to bottom to show newest logs
-            setTimeout(() => {
-                consoleDiv.scrollTop = consoleDiv.scrollHeight;
-            }, 100);
+            // Auto-scroll to bottom
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
         }
 
         function clearLogs() {
@@ -1045,16 +1040,15 @@
                 updateTrainingChart(gameState.training);
                 updatePerformanceChart(gameState.bots);
                 updateConfigSections(gameState.action_space, gameState.observation_space);
-                updateMasterBotSelector(gameState.bots);
                 updateRewardChart(rewardProgression.progression);
                 updateLossChart(rewardProgression.progression);
                 updateLogConsole(trainingLogs.logs);
+                updateBotSelector(gameState.bots);
                 
-                // Auto-refresh bot-specific views if a bot is selected
-                const botName = getSelectedBot();
-                if (botName) {
+                // Auto-refresh observation if a bot is selected
+                const selector = document.getElementById('botSelector');
+                if (selector.value) {
                     updateBotObservation();
-                    updateRewardEvents();
                 }
 
                 statusBadge.textContent = 'Connected';
@@ -1063,140 +1057,6 @@
                 statusBadge.textContent = 'Disconnected';
                 statusBadge.className = 'status-badge status-offline';
                 console.error('Error refreshing data:', error);
-            }
-        }
-
-        // Master bot selector functions
-        function updateMasterBotSelector(bots) {
-            const selector = document.getElementById('masterBotSelector');
-            if (!selector) return;
-            const currentValue = selector.value;
-            
-            selector.innerHTML = '<option value="">-- All Bots (Global View) --</option>';
-            
-            bots.forEach(bot => {
-                const option = document.createElement('option');
-                option.value = bot.name;
-                option.textContent = `${bot.name} (${bot.status})`;
-                selector.appendChild(option);
-            });
-            
-            if (currentValue && (currentValue === '' || bots.some(b => b.name === currentValue))) {
-                selector.value = currentValue;
-            }
-        }
-
-        function onMasterBotChange() {
-            const botName = getSelectedBot();
-            updateBotObservation();
-            updateRewardEvents();
-            updateRewardChart();
-            updateLossChart();
-            updateLogConsole();
-        }
-
-        function getSelectedBot() {
-            const selector = document.getElementById('masterBotSelector');
-            return selector ? selector.value : '';
-        }
-
-        async function fetchRewardEvents(botName) {
-            try {
-                const url = botName 
-                    ? `${API_BASE}/reward-events?bot_name=${encodeURIComponent(botName)}`
-                    : `${API_BASE}/reward-events`;
-                const response = await fetch(url);
-                if (!response.ok) throw new Error('Failed to fetch reward events');
-                return await response.json();
-            } catch (error) {
-                console.error('Error fetching reward events:', error);
-                throw error;
-            }
-        }
-
-        async function updateRewardEvents() {
-            const botName = getSelectedBot();
-            const viewer = document.getElementById('rewardEventsViewer');
-            const countSpan = document.getElementById('rewardEventCount');
-            
-            if (!botName) {
-                viewer.innerHTML = '<div style="text-align: center; padding: 20px; color: #667eea;">Select a bot from the dropdown above to view its reward events</div>';
-                countSpan.textContent = '0 events';
-                return;
-            }
-            
-            try {
-                const data = await fetchRewardEvents(botName);
-                console.log('Reward events response for', botName, ':', data); // Debug log
-                
-                if (!data) {
-                    viewer.innerHTML = '<div style="color: #ef4444;">Error: No data received from server</div>';
-                    countSpan.textContent = 'Error';
-                    return;
-                }
-                
-                if (data.status === 'success') {
-                    const events = Array.isArray(data.events) ? data.events : [];
-                    countSpan.textContent = `${events.length} events`;
-                    
-                    if (events.length === 0) {
-                        viewer.innerHTML = `
-                            <div style="text-align: center; padding: 20px;">
-                                <div style="color: #f59e0b; margin-bottom: 10px;">No reward events yet for <strong>${botName}</strong></div>
-                                <div style="color: #667eea; font-size: 0.9em;">
-                                    Events will appear here when the bot receives rewards:<br>
-                                    • Damage dealt/taken<br>
-                                    • Good aim detection<br>
-                                    • Proximity rewards<br>
-                                    • Survival rewards<br>
-                                    • Yaw exploration rewards
-                                </div>
-                            </div>
-                        `;
-                        return;
-                    }
-                    
-                    const eventsHtml = events.slice().reverse().map((eventLog) => {
-                        const timestamp = new Date(eventLog.timestamp).toLocaleString();
-                        const event = eventLog.event || {};
-                        const source = eventLog.source || 'mod';
-                        const sourceColor = source === 'auto_calculated' ? '#10b981' : '#667eea';
-                        const sourceLabel = source === 'auto_calculated' ? 'Auto' : 'Mod';
-                        
-                        const jsonStr = JSON.stringify(event, null, 2);
-                        const formattedJson = jsonStr
-                            .replace(/("type":\s*")([^"]+)(")/g, `$1<span style="color: #f59e0b;">$2</span>$3`)
-                            .replace(/("amount":\s*)([0-9.]+)/g, `$1<span style="color: #10b981;">$2</span>`)
-                            .replace(/("damage_percentage":\s*)([0-9.]+)/g, `$1<span style="color: #10b981;">$2</span>`)
-                            .replace(/("distance":\s*)([0-9.]+)/g, `$1<span style="color: #60a5fa;">$2</span>`)
-                            .replace(/("yaw":\s*)([0-9.-]+)/g, `$1<span style="color: #a78bfa;">$2</span>`)
-                            .replace(/("pitch":\s*)([0-9.-]+)/g, `$1<span style="color: #a78bfa;">$2</span>`);
-                        
-                        return `
-                            <div class="log-entry" style="margin-bottom: 15px; padding: 12px; border-left: 4px solid ${sourceColor};">
-                                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                                    <span class="log-timestamp">${timestamp}</span>
-                                    <span style="color: ${sourceColor}; font-weight: 600; background: rgba(102, 126, 234, 0.1); padding: 2px 8px; border-radius: 4px;">${sourceLabel}</span>
-                                </div>
-                                <div style="background: #2d2d2d; padding: 10px; border-radius: 4px; overflow-x: auto;">
-                                    <pre style="margin: 0; color: #d4d4d4; font-size: 0.9em;">${formattedJson}</pre>
-                                </div>
-                            </div>
-                        `;
-                    }).join('');
-                    
-                    viewer.innerHTML = `
-                        <div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 2px solid #667eea;">
-                            <strong style="color: #667eea;">Bot: ${data.bot_name}</strong><br>
-                            <span style="color: #f59e0b;">Total Events: ${events.length}</span>
-                        </div>
-                        ${eventsHtml}
-                    `;
-                } else {
-                    viewer.innerHTML = `<div style="color: #ef4444;">${data.message || 'Error loading reward events'}</div>`;
-                }
-            } catch (error) {
-                viewer.innerHTML = `<div style="color: #ef4444;">Error: ${error.message}</div>`;
             }
         }
 

@@ -45,13 +45,13 @@ RCON_PASSWORD = os.getenv("RCON_PASSWORD", "minecraft")
 
 # Global configuration storage
 action_space_config = {
-    "enableMovement": True,
-    "enableJump": True,
+    "enableMovement": False,
+    "enableJump": False,
     "enableSneak": False,
     "enableSprint": False,
-    "enableAttack": True,
-    "enableUseItem": True,
-    "enableHotbar": True,
+    "enableAttack": False,
+    "enableUseItem": False,
+    "enableHotbar": False,
     "enableLook": True,
     "movementBins": 8,
     "yawBins": 16,
@@ -61,16 +61,16 @@ action_space_config = {
 observation_space_config = {
     "includePlayerData": True,
     "includeEntityData": True,
-    "includeBlockData": True,
-    "includeInventoryData": True,
+    "includeBlockData": False,
+    "includeInventoryData": False,
     "maxEntities": 10,
-    "maxBlocks": 20,  # REDUCED from 50 to 20 for performance
+    "maxBlocks": 0,  # REDUCED from 50 to 20 for performance
     "maxInventorySlots": 36,
     "includeHealth": True,
     "includePosition": True,
     "includeRotation": True,
-    "includeVelocity": True,
-    "includeArmor": True
+    "includeVelocity": False,
+    "includeArmor": False
 }
 
 # Model configuration - maps bot names to model versions
@@ -97,33 +97,18 @@ def estimate_observation_dim():
         dim += 9 * 3  # 9 hotbar slots, 3 features each
     return dim
 
-def estimate_action_dim():
-    """Estimate action dimension based on config."""
-    dim = 0
-    if action_space_config.get("enableMovement", True):
-        dim += action_space_config.get("movementBins", 8)
-    if action_space_config.get("enableJump", True): dim += 1
-    if action_space_config.get("enableSneak", True): dim += 1
-    if action_space_config.get("enableSprint", True): dim += 1
-    if action_space_config.get("enableAttack", True): dim += 1
-    if action_space_config.get("enableUseItem", True): dim += 1
-    if action_space_config.get("enableHotbar", True): dim += 10
-    if action_space_config.get("enableLook", True):
-        dim += action_space_config.get("yawBins", 16) + action_space_config.get("pitchBins", 9)
-    return dim
-
-# Initialize Fast RL agent (for version 0.1 - <50ms inference)
+# Initialize Fast RL agent (for version 0.1)
 try:
-    obs_dim = estimate_observation_dim()
-    act_dim = estimate_action_dim()
-    # Use FastRLAgent for version 0.1 - much faster than PPO
+    # Fast RL model always uses fixed 194-dim vector (7 player + 60 entities + 100 blocks + 27 inventory)
+    # regardless of observation_space_config, so we hardcode it here
+    obs_dim = 194
+    # Remove act_dim - not needed anymore
     fast_rl_agent = FastRLAgent(
         observation_dim=obs_dim,
-        action_dim=act_dim,
-        device='cpu'
+        device='cpu',
+        hidden_dim=256
     )
-    print(f"Fast RL agent initialized successfully: obs_dim={obs_dim}, act_dim={act_dim}")
-    # Keep PPO agent as None for now (can be used for future versions)
+    print(f"Fast RL agent initialized successfully: obs_dim={obs_dim}")
     ppo_agent = None
 except Exception as e:
     print(f"ERROR initializing Fast RL agent: {e}")
@@ -175,11 +160,82 @@ def normalize_yaw(yaw):
 
 def calculate_auto_rewards(bot_name: str, observation: Dict) -> List[Dict]:
     """
-    Calculate automatic rewards based on observation data.
-    Gives rewards for looking at enemies, being close to enemies, etc.
-    Returns a list of reward events.
+    Calculate automatic rewards that complement mod-sent rewards.
+    Does NOT duplicate aim rewards (mod already sends those).
     """
-    #too much clutter from this one
+    events = []
+    
+    # Safety check
+    if 'player' not in observation or 'entities' not in observation:
+        return events
+    
+    player = observation['player']
+    entities = observation['entities']
+    
+    # Find nearest enemy player
+    nearest_enemy = None
+    min_dist = float('inf')
+    
+    for entity in entities:
+        if entity.get('isPlayer', False):
+            dx = entity.get('relativeX', 0)
+            dy = entity.get('relativeY', 0)
+            dz = entity.get('relativeZ', 0)
+            dist = (dx**2 + dy**2 + dz**2)**0.5
+            
+            if dist < min_dist:
+                min_dist = dist
+                nearest_enemy = entity
+    
+    # === REWARD 1: Proximity (mod doesn't track this) ===
+    # Encourage bot to get close to enemy
+    # Constant reward within 3 blocks, then drops off beyond that
+    if nearest_enemy is not None:
+        if min_dist <= 3.0:
+            # Full reward when within melee range (0-3 blocks)
+            proximity_reward = 0.1
+        elif min_dist < 10.0:
+            # Reward drops off linearly from 3 to 10 blocks
+            # 3 blocks = 0.1, 10 blocks = 0.0
+            proximity_reward = 0.1 * (1.0 - (min_dist - 3.0) / 7.0)
+        else:
+            # No reward beyond 10 blocks
+            proximity_reward = 0.0
+        
+        if proximity_reward > 0:
+            events.append({
+                "type": "proximity",
+                "amount": proximity_reward
+            })
+    
+    # === REWARD 2: Pitch Control ===
+    # Strong reward for keeping pitch level (looking straight ahead)
+    # Give reward/penalty for ALL pitch values so bot always has gradient
+    current_pitch = player.get('pitch', 0)
+    
+    # Reward decreases as pitch moves away from 0
+    # pitch = 0° → reward = 0.1 (best)
+    # pitch = ±30° → reward = 0.05
+    # pitch = ±60° → reward = 0.0
+    # pitch = ±90° → reward = -0.05 (penalty!)
+    pitch_error = abs(current_pitch)
+    
+    if pitch_error <= 60.0:
+        # Positive reward when pitch is reasonable
+        pitch_quality = 1.0 - (pitch_error / 60.0)
+        pitch_reward = pitch_quality * 0.3
+    else:
+        # Penalty when looking too far up/down
+        # Linearly increases penalty from -60° to -90°
+        penalty_amount = (pitch_error - 60.0) / 30.0  # 0.0 at 60°, 1.0 at 90°
+        pitch_reward = -0.15 * min(penalty_amount, 1.0)
+    
+    events.append({
+        "type": "pitch_control",
+        "amount": pitch_reward
+    })
+    
+    return events
 
 # Use multiprocessing for running the RCON command in a separate process
 def mc_command(command: str):
@@ -325,12 +381,28 @@ async def trigger_backprop(bot_name: str = None):
         
         # Check action diversity (how many unique actions in the batch)
         if agent.actions:
-            unique_actions = len(set(agent.actions))
-            action_diversity = unique_actions / len(agent.actions) if agent.actions else 0.0
-            print(f"Training with {total_samples} samples, rewards: min={min(agent.rewards) if agent.rewards else 0:.4f}, "
-                  f"max={max(agent.rewards) if agent.rewards else 0:.4f}, "
-                  f"mean={avg_reward_before:.4f}, sum={total_rewards_before:.4f}, "
-                  f"action_diversity={action_diversity:.2%} ({unique_actions}/{len(agent.actions)} unique)")
+            # Convert action dicts to tuples for hashing (multi-discrete actions are dicts)
+            try:
+                if isinstance(agent.actions[0], dict):
+                    # For FastRLAgent: actions are dicts with keys like 'movement', 'jump', 'attack', 'yaw', 'pitch'
+                    # Convert to tuple of values in consistent order
+                    action_keys = ['movement', 'jump', 'attack', 'yaw', 'pitch']
+                    action_tuples = [tuple(a.get(k, 0) for k in action_keys) for a in agent.actions]
+                else:
+                    # For PPO agent: actions might be integers or other types
+                    action_tuples = agent.actions
+                unique_actions = len(set(action_tuples))
+                action_diversity = unique_actions / len(agent.actions) if agent.actions else 0.0
+                print(f"Training with {total_samples} samples, rewards: min={min(agent.rewards) if agent.rewards else 0:.4f}, "
+                      f"max={max(agent.rewards) if agent.rewards else 0:.4f}, "
+                      f"mean={avg_reward_before:.4f}, sum={total_rewards_before:.4f}, "
+                      f"action_diversity={action_diversity:.2%} ({unique_actions}/{len(agent.actions)} unique)")
+            except (IndexError, AttributeError, TypeError) as e:
+                # Fallback if action structure is unexpected
+                print(f"Training with {total_samples} samples, rewards: min={min(agent.rewards) if agent.rewards else 0:.4f}, "
+                      f"max={max(agent.rewards) if agent.rewards else 0:.4f}, "
+                      f"mean={avg_reward_before:.4f}, sum={total_rewards_before:.4f}, "
+                      f"(action diversity calculation skipped: {e})")
         else:
             print(f"Training with {total_samples} samples, but no actions recorded!")
         
@@ -343,6 +415,85 @@ async def trigger_backprop(bot_name: str = None):
         total_rewards_for_interval = stats.get("score", total_rewards_before)  # Use score from stats (sum of rewards)
         loss = stats.get("loss", 0.0)
         samples_trained = stats.get("samples_trained", 0)
+        
+        # Aggregate reward type data from the interval (before training clears the buffer)
+        reward_type_data = {}  # {type: {'count': int, 'amount': float}}
+        
+        # First, try to get from fast_rl_agent.reward_types
+        if fast_rl_agent and hasattr(fast_rl_agent, 'reward_types'):
+            for reward_type_dict in fast_rl_agent.reward_types:
+                for reward_type, data in reward_type_dict.items():
+                    if reward_type not in reward_type_data:
+                        reward_type_data[reward_type] = {'count': 0, 'amount': 0.0}
+                    # Handle both old format (just count) and new format (dict with count/amount)
+                    if isinstance(data, dict):
+                        reward_type_data[reward_type]['count'] += data.get('count', 0)
+                        reward_type_data[reward_type]['amount'] += data.get('amount', 0.0)
+                    else:
+                        # Old format - just a count
+                        reward_type_data[reward_type]['count'] += data
+        
+        # Also compute from bot_reward_events as backup (events that occurred since last backprop)
+        # This ensures we capture all events even if fast_rl_agent.reward_types is incomplete
+        current_time = datetime.now()
+        # Find the timestamp of the last training log (if any) to determine the interval window
+        last_log_time = None
+        if training_logs and len(training_logs) > 0:
+            try:
+                last_log_ts = training_logs[-1].get("timestamp", "")
+                if last_log_ts:
+                    last_log_time = datetime.fromisoformat(last_log_ts.replace('Z', '+00:00') if 'Z' in last_log_ts else last_log_ts)
+            except (ValueError, TypeError):
+                pass
+        
+        # Aggregate events from bot_reward_events for this interval
+        for bot_name, events in bot_reward_events.items():
+            for event_log in events:
+                event_ts = event_log.get("timestamp", "")
+                if event_ts:
+                    try:
+                        event_ts_clean = event_ts.replace('Z', '+00:00') if 'Z' in event_ts else event_ts
+                        event_dt = datetime.fromisoformat(event_ts_clean)
+                        # Include events from the last backprop to now (or all events if no previous log)
+                        if last_log_time is None or event_dt >= last_log_time:
+                            event = event_log.get("event", {})
+                            event_type = event.get("type", "")
+                            if event_type:
+                                if event_type not in reward_type_data:
+                                    reward_type_data[event_type] = {'count': 0, 'amount': 0.0}
+                                reward_type_data[event_type]['count'] += 1
+                                # Calculate reward amount (same logic as FastRLAgent.add_reward)
+                                amount = 0.0
+                                if event_type == 'damage_dealt':
+                                    if 'damage_percentage' in event:
+                                        amount = event.get('damage_percentage', 0) * 10.0
+                                    else:
+                                        amount = event.get('amount', 0) * 1.0
+                                elif event_type == 'damage_taken':
+                                    amount = -event.get('amount', 0) * 0.5
+                                elif event_type == 'good_aim':
+                                    amount = event.get('amount', 0.1)
+                                elif event_type == 'proximity':
+                                    amount = event.get('amount', 0)
+                                elif event_type == 'survival':
+                                    amount = event.get('amount', 0)
+                                elif event_type == 'yaw_exploration':
+                                    amount = event.get('amount', 0)
+                                elif event_type == 'pitch_control':
+                                    amount = event.get('amount', 0)
+                                elif event_type == 'won_duel':
+                                    amount = 10.0
+                                elif event_type == 'death':
+                                    amount = -1.0
+                                reward_type_data[event_type]['amount'] += amount
+                    except (ValueError, TypeError):
+                        continue
+        
+        # Debug logging
+        if reward_type_data:
+            print(f"[BACKPROP] Reward type data for interval: {reward_type_data}")
+        else:
+            print(f"[BACKPROP] WARNING: No reward types found")
         
         # Get current bot statistics
         bot_stats = {}
@@ -365,7 +516,8 @@ async def trigger_backprop(bot_name: str = None):
                 "loss": loss,
                 "total_rewards": total_rewards_for_interval,  # Total rewards collected in this 400-tick interval
                 "avg_reward_per_sample": avg_reward_before,
-                "reward_delta": total_rewards_for_interval - total_rewards_before
+                "reward_delta": total_rewards_for_interval - total_rewards_before,
+                "reward_types": reward_type_data  # Data by reward type: {type: {'count': int, 'amount': float}}
             },
             "bot_statistics": bot_stats,
             "system_stats": {
@@ -1056,7 +1208,7 @@ async def get_game_state():
                 if avg_interval > 0:
                     # Calculate API call rate, then multiply by 20/3 to get actual game TPS
                     api_call_rate = 1.0 / avg_interval
-                    tick_rate = api_call_rate * (20.0 / 3.0)
+                    tick_rate = api_call_rate / 3.0
         
         bot_info = {
             "name": bot.name,
@@ -1080,16 +1232,17 @@ async def get_game_state():
         })
     
     # Get training statistics
+    # Get training statistics
     agent = fast_rl_agent if fast_rl_agent else ppo_agent
     training_stats = {
         "total_samples": len(agent.observations) if agent else 0,
         "backprop_interval": BACKPROP_INTERVAL,
         "observation_dim": obs_dim if 'obs_dim' in globals() else 0,
-        "action_dim": act_dim if 'act_dim' in globals() else 0,
+        # Remove action_dim - no longer relevant
         "last_loss": fast_rl_agent.last_loss if fast_rl_agent else 0.0,
         "last_score": fast_rl_agent.last_score if fast_rl_agent else 0.0
     }
-    
+        
     # Add bot-specific metrics
     for bot_info in bots_data:
         bot_name = bot_info["name"]
@@ -1135,13 +1288,24 @@ async def get_stats():
 @app.get("/training-logs")
 async def get_training_logs():
     """
-    Returns training logs - statistics recorded every 400 ticks.
+    Returns training logs - statistics recorded every 100 ticks.
     """
-    return {
-        "logs": training_logs[-100:],  # Return last 100 entries
-        "total_logs": len(training_logs),
-        "backprop_interval": BACKPROP_INTERVAL
-    }
+    try:
+        return {
+            "logs": training_logs[-100:] if training_logs else [],  # Return last 100 entries
+            "total_logs": len(training_logs) if training_logs else 0,
+            "backprop_interval": BACKPROP_INTERVAL
+        }
+    except Exception as e:
+        print(f"Error in get_training_logs: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "logs": [],
+            "total_logs": 0,
+            "backprop_interval": BACKPROP_INTERVAL,
+            "error": str(e)
+        }
 
 @app.get("/reward-events")
 async def get_reward_events(bot_name: str = None):
@@ -1173,24 +1337,126 @@ async def get_reward_events(bot_name: str = None):
 async def get_reward_progression():
     """
     Returns reward progression data for graphing.
-    Extracts reward data from training logs.
+    Extracts reward data from training logs and computes reward_types from bot_reward_events.
     """
-    progression = []
-    for log in training_logs:
-        progression.append({
-            "timestamp": log["timestamp"],
-            "interval": len(progression) + 1,  # Interval number (1, 2, 3, ...)
-            "total_rewards": log["training_stats"]["total_rewards"],
-            "avg_reward": log["training_stats"]["avg_reward_per_sample"],
-            "loss": log["training_stats"]["loss"],
-            "samples_trained": log["training_stats"]["samples_trained"],
-            "bot_rewards": {name: stats["score"] for name, stats in log["bot_statistics"].items()}
-        })
-    
-    return {
-        "progression": progression[-50:],  # Last 50 intervals
-        "total_intervals": len(progression)
-    }
+    try:
+        from datetime import datetime as dt
+        progression = []
+        if training_logs:
+            # Build a list of interval timestamps for time-based matching
+            interval_timestamps = []
+            for log in training_logs:
+                log_timestamp = log.get("timestamp", "")
+                if log_timestamp:
+                    try:
+                        # Parse timestamp (handle both with and without timezone)
+                        ts = log_timestamp.replace('Z', '+00:00') if 'Z' in log_timestamp else log_timestamp
+                        interval_timestamps.append(dt.fromisoformat(ts))
+                    except (ValueError, TypeError):
+                        interval_timestamps.append(None)
+                else:
+                    interval_timestamps.append(None)
+            
+            for idx, log in enumerate(training_logs):
+                try:
+                    training_stats = log.get("training_stats", {})
+                    bot_statistics = log.get("bot_statistics", {})
+                    log_timestamp = log.get("timestamp", "")
+                    
+                    # Use saved reward_types from training logs (this is the primary source)
+                    # This data was saved at backprop time and won't be deleted like bot_reward_events
+                    reward_types = training_stats.get("reward_types", {})
+                    
+                    # If reward_types is empty or missing, try to compute from bot_reward_events as fallback
+                    # (only for recent intervals where events might still be available)
+                    if not reward_types:
+                        # Determine time window for this interval
+                        interval_start = None
+                        interval_end = None
+                        
+                        if idx > 0 and interval_timestamps[idx - 1] is not None:
+                            interval_start = interval_timestamps[idx - 1]
+                        
+                        if interval_timestamps[idx] is not None:
+                            interval_end = interval_timestamps[idx]
+                        
+                        # Aggregate events from all bots for this interval (fallback only)
+                        if interval_start is not None and interval_end is not None:
+                            # Collect events from all bots in this time window
+                            for bot_name, events in bot_reward_events.items():
+                                for event_log in events:
+                                    event_ts = event_log.get("timestamp", "")
+                                    if event_ts:
+                                        try:
+                                            # Parse event timestamp
+                                            event_ts_clean = event_ts.replace('Z', '+00:00') if 'Z' in event_ts else event_ts
+                                            event_dt = dt.fromisoformat(event_ts_clean)
+                                            
+                                            # Check if event is in this interval (between previous and current log timestamp)
+                                            if event_dt >= interval_start and event_dt < interval_end:
+                                                event = event_log.get("event", {})
+                                                event_type = event.get("type", "")
+                                                if event_type:
+                                                    if event_type not in reward_types:
+                                                        reward_types[event_type] = {'count': 0, 'amount': 0.0}
+                                                    reward_types[event_type]['count'] += 1
+                                                    # Calculate reward amount (same logic as FastRLAgent.add_reward)
+                                                    amount = 0.0
+                                                    if event_type == 'damage_dealt':
+                                                        if 'damage_percentage' in event:
+                                                            amount = event.get('damage_percentage', 0) * 10.0
+                                                        else:
+                                                            amount = event.get('amount', 0) * 1.0
+                                                    elif event_type == 'damage_taken':
+                                                        amount = -event.get('amount', 0) * 0.5
+                                                    elif event_type == 'good_aim':
+                                                        amount = event.get('amount', 0.1)
+                                                    elif event_type == 'proximity':
+                                                        amount = event.get('amount', 0)
+                                                    elif event_type == 'survival':
+                                                        amount = event.get('amount', 0)
+                                                    elif event_type == 'yaw_exploration':
+                                                        amount = event.get('amount', 0)
+                                                    elif event_type == 'pitch_control':
+                                                        amount = event.get('amount', 0)
+                                                    elif event_type == 'won_duel':
+                                                        amount = 10.0
+                                                    elif event_type == 'death':
+                                                        amount = -1.0
+                                                    reward_types[event_type]['amount'] += amount
+                                        except (ValueError, TypeError) as e:
+                                            continue
+                    
+                    progression.append({
+                        "timestamp": log_timestamp,
+                        "interval": idx + 1,  # Interval number (1, 2, 3, ...)
+                        "total_rewards": training_stats.get("total_rewards", 0.0),
+                        "avg_reward": training_stats.get("avg_reward_per_sample", 0.0),
+                        "loss": training_stats.get("loss", 0.0),
+                        "samples_trained": training_stats.get("samples_trained", 0),
+                        "bot_rewards": {name: stats.get("score", 0.0) for name, stats in bot_statistics.items()},
+                        "reward_types": reward_types  # Breakdown by reward type from bot_reward_events
+                    })
+                except Exception as e:
+                    print(f"Error processing log entry {idx}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
+        
+        # Return all progression data (not limited to 50) so frontend can show full history
+        return {
+            "progression": progression,  # Return all intervals, not just last 50
+            "total_intervals": len(progression)
+        }
+    except Exception as e:
+        print(f"Error in get_reward_progression: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "progression": [],
+            "total_intervals": 0,
+            "error": str(e)
+        }
 
 @app.get("/bot-observation/{bot_name}")
 async def get_bot_observation(bot_name: str):
