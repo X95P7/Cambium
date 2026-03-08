@@ -7,11 +7,16 @@ import torch.nn as nn
 import numpy as np
 from typing import Dict, List, Tuple
 
+# Predefined discrete bins for look deltas (degrees per tick).
+# Each bin is a distinct, meaningful angular velocity choice.
+# At 20 TPS: ±20°/tick = 400°/s (fast spin), ±2°/tick = 40°/s (fine aim).
+YAW_BINS = [-20.0, -10.0, -5.0, -2.0, 0.0, 2.0, 5.0, 10.0, 20.0]
+PITCH_BINS = [-5.0, -2.0, 0.0, 2.0, 5.0]
+
 class MultiDiscretePolicy(nn.Module):
     """
     Multi-discrete policy with separate heads for each action component.
-    Total outputs: 8 (movement) + 2 (jump) + 2 (attack) + 16 (yaw) + 9 (pitch) = 37
-    Much more efficient than 4608 flat action space!
+    Total outputs: 8 (movement) + 2 (jump) + 2 (attack) + 9 (yaw) + 5 (pitch) = 26
     """
     def __init__(self, observation_dim: int, hidden_dim: int = 256):
         super(MultiDiscretePolicy, self).__init__()
@@ -25,11 +30,19 @@ class MultiDiscretePolicy(nn.Module):
         )
         
         # Separate output heads for each action component
-        self.movement_head = nn.Linear(hidden_dim, 8)   # 8 movement directions
-        self.jump_head = nn.Linear(hidden_dim, 2)       # jump yes/no
-        self.attack_head = nn.Linear(hidden_dim, 2)     # attack yes/no
-        self.yaw_head = nn.Linear(hidden_dim, 16)       # 16 yaw buckets
-        self.pitch_head = nn.Linear(hidden_dim, 9)      # 9 pitch buckets
+        self.movement_head = nn.Linear(hidden_dim, 8)                # 8 movement directions
+        self.jump_head = nn.Linear(hidden_dim, 2)                    # jump yes/no
+        self.attack_head = nn.Linear(hidden_dim, 2)                  # attack yes/no
+        self.yaw_head = nn.Linear(hidden_dim, len(YAW_BINS))        # discrete yaw deltas
+        self.pitch_head = nn.Linear(hidden_dim, len(PITCH_BINS))     # discrete pitch deltas
+        
+        # Bias pitch toward "no change" (center bin) so pitch doesn't drift
+        # during early training while the model learns yaw tracking first.
+        # PITCH_BINS = [-5, -2, 0, 2, 5], center index = 2
+        with torch.no_grad():
+            center = len(PITCH_BINS) // 2
+            self.pitch_head.bias.zero_()
+            self.pitch_head.bias[center] = 2.0
     
     def forward(self, observation: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Returns dict of logits for each action component"""
@@ -159,12 +172,8 @@ class FastRLAgent:
 
     def _actions_dict_to_minecraft(self, actions_dict: Dict[str, int], action_space: Dict) -> Dict:
         """Convert action dict from policy to Minecraft action format"""
-        yaw_bins = action_space.get("yawBins", 16)
-        pitch_bins = action_space.get("pitchBins", 9)
-        
-        # Convert yaw/pitch bins to angles
-        yaw = float((actions_dict['yaw'] / yaw_bins) * 45.0 - 22.5)
-        pitch = float((actions_dict['pitch'] / (pitch_bins - 1)) * 45.0 - 22.5)
+        yaw = float(YAW_BINS[actions_dict['yaw']])
+        pitch = float(PITCH_BINS[actions_dict['pitch']])
         
         return {
             "movement": int(actions_dict['movement']),
@@ -191,11 +200,12 @@ class FastRLAgent:
         # Convert to Minecraft format
         minecraft_action = self._actions_dict_to_minecraft(actions_dict, action_space)
         
-        # Store for training
+        # Store for training (all buffers must stay in sync)
         self.observations.append(obs_vector)
-        self.actions.append(actions_dict)  # Store the dict, not minecraft_action
-        self.rewards.append(0.0)  # Will be updated by add_reward
-        self.reward_types.append({})  # Will be updated by add_reward
+        self.actions.append(actions_dict)
+        self.rewards.append(0.0)
+        self.reward_types.append({})
+        self.dones.append(False)
         
         return minecraft_action
 
@@ -263,8 +273,9 @@ class FastRLAgent:
         self.bot_scores[bot_name] = self.bot_scores.get(bot_name, 0.0) + total_reward
 
     def add_done(self, done: bool):
-        """Mark episode as done"""
-        self.dones.append(done)
+        """Mark the most recent step as an episode boundary"""
+        if self.dones and done:
+            self.dones[-1] = True
 
     def train(self, batch_size: int = 64, epochs: int = 1) -> Dict:
         """Policy gradient training with reward-to-go and multi-discrete actions"""
@@ -272,28 +283,30 @@ class FastRLAgent:
             return {"status": "insufficient_data", "buffer_size": len(self.observations)}
         
         # Ensure all buffers have the same length
-        min_len = min(len(self.observations), len(self.actions), len(self.rewards), len(self.reward_types))
-        # Trim all buffers to the minimum length to keep them synchronized
+        min_len = min(len(self.observations), len(self.actions), len(self.rewards),
+                      len(self.reward_types), len(self.dones))
         self.observations = self.observations[:min_len]
         self.actions = self.actions[:min_len]
         self.rewards = self.rewards[:min_len]
         self.reward_types = self.reward_types[:min_len]
+        self.dones = self.dones[:min_len]
         
         obs_tensor = torch.FloatTensor(np.array(self.observations)).to(self.device)
         
-        # Extract each action component from the action dicts
         actions_movement = torch.LongTensor([a['movement'] for a in self.actions]).to(self.device)
         actions_jump = torch.LongTensor([a['jump'] for a in self.actions]).to(self.device)
         actions_attack = torch.LongTensor([a['attack'] for a in self.actions]).to(self.device)
         actions_yaw = torch.LongTensor([a['yaw'] for a in self.actions]).to(self.device)
         actions_pitch = torch.LongTensor([a['pitch'] for a in self.actions]).to(self.device)
         
-        # Calculate reward-to-go (discounted returns)
+        # Reward-to-go with episode boundary resets
         returns = []
         R = 0
         gamma = 0.99
-        for r in reversed(self.rewards):
-            R = r + gamma * R
+        for i in range(len(self.rewards) - 1, -1, -1):
+            if self.dones[i]:
+                R = 0
+            R = self.rewards[i] + gamma * R
             returns.insert(0, R)
         
         returns_tensor = torch.FloatTensor(returns).to(self.device)

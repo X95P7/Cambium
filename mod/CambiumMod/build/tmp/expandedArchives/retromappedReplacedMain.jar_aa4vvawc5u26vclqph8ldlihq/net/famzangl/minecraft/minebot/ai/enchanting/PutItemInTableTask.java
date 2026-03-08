@@ -1,0 +1,50 @@
+/*******************************************************************************
+ * This file is part of Minebot.
+ *
+ * Minebot is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Minebot is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Minebot.  If not, see <http://www.gnu.org/licenses/>.
+ *******************************************************************************/
+package net.famzangl.minecraft.minebot.ai.enchanting;
+
+import net.famzangl.minecraft.minebot.ai.AIHelper;
+import net.famzangl.minecraft.minebot.ai.task.inventory.PutItemInContainerTask;
+import net.minecraft.client.gui.GuiEnchantment;
+import net.minecraft.inventory.Slot;
+import net.minecraft.item.ItemStack;
+
+/**
+ * Puts an item the table accepts in the enchantment table.
+ * 
+ * @author michael
+ *
+ */
+public class PutItemInTableTask extends PutItemInContainerTask {
+	private static final int TABLE_INV_OFFSET = 2;
+
+	@Override
+	protected int getStackToPut(AIHelper h) {
+		final GuiEnchantment screen = (GuiEnchantment) h.getMinecraft().field_71462_r;
+		for (int i = TABLE_INV_OFFSET; i < 9 * 4 + TABLE_INV_OFFSET; i++) {
+			final Slot slot = screen.field_147002_h.func_75139_a(i);
+			if (slot == null || !slot.func_82869_a(h.getMinecraft().field_71439_g)) {
+				continue;
+			}
+			final ItemStack stack = slot.func_75211_c();
+			if (stack != null && stack.func_77956_u()) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+}

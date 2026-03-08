@@ -220,17 +220,25 @@ Extracts inventory information:
 
 ## Usage
 
+### Chat Commands
+
+All commands are triggered via in-game chat using the `&` prefix:
+
+| Command | Description |
+|---------|-------------|
+| `&setup` | Registers the bot with the backend API (calls `/bot-setup/`). Creates the bot, gives kit, pairs with another bot, and starts a duel if a pair is found. |
+| `&bot-setup` | Loads all configuration from the backend: action space, observation space, and model endpoint. Creates the `RLControllerStrategy` instance. |
+| `&run` | Starts the RL Controller Strategy. Begins the tick loop that collects observations, predicts actions, and executes them. |
+| `&reset` | Clears all active strategies and resets the bot state. |
+
 ### Starting a Bot
 
+Typical startup flow:
+
 1. Join a Minecraft server with the mod installed
-2. Type `&setup` in chat
-3. The bot will:
-   - Register with the backend
-   - Load action/observation space configurations
-   - Load model endpoint
-   - Start the RL controller strategy
-   - Get paired with another bot
-   - Start a duel if a pair is found
+2. Type `&setup` in chat — registers bot with backend, pairs with another bot, starts duel
+3. Type `&bot-setup` — loads action/observation config and model version from backend
+4. Type `&run` — starts the RL controller loop (observation → prediction → action execution)
 
 ### Monitoring
 
@@ -238,6 +246,7 @@ The bot will display its status in the chat:
 - "RL Controller started!" - When the controller is activated
 - "Bot {name} has been added to the game" - On registration
 - "Bot {name} has died!" - On death
+- "Bot setup complete! Use &run to start the bot." - After `&bot-setup`
 - Error messages for any API failures
 
 ### Configuration
@@ -245,8 +254,8 @@ The bot will display its status in the chat:
 To change action/observation spaces or model endpoint:
 
 1. Use the API endpoints to update configurations
-2. The bot will automatically reload configurations on next setup
-3. Or restart the bot by typing `&setup` again
+2. The bot will automatically reload configurations on next `&bot-setup`
+3. Or restart the bot by running `&reset` then the startup flow again
 
 ## Development
 

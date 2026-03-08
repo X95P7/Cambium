@@ -54,8 +54,8 @@ action_space_config = {
     "enableHotbar": False,
     "enableLook": True,
     "movementBins": 8,
-    "yawBins": 16,
-    "pitchBins": 9
+    "yawBins": 9,
+    "pitchBins": 5
 }
 
 observation_space_config = {
@@ -127,7 +127,7 @@ MAX_REWARD_EVENTS_PER_BOT = 100  # Keep last 100 reward events per bot
 
 # Tick counting for backprop
 bot_tick_counts = {}  # bot_name -> tick count
-BACKPROP_INTERVAL = 100  # Train every 100 ticks
+BACKPROP_INTERVAL = 200  # Train every 200 ticks (more samples = lower variance)
 
 # Tick timing tracking for TPS calculation
 tick_times = {}  # bot_name -> list of timestamps
@@ -209,26 +209,15 @@ def calculate_auto_rewards(bot_name: str, observation: Dict) -> List[Dict]:
             })
     
     # === REWARD 2: Pitch Control ===
-    # Strong reward for keeping pitch level (looking straight ahead)
-    # Give reward/penalty for ALL pitch values so bot always has gradient
+    # Reward for keeping pitch level (looking straight ahead).
+    # Non-negative only: positive when pitch is reasonable, zero when extreme.
+    # Negative penalties caused the total reward to go deeply negative when
+    # pitch drifted (accumulated deltas), which poisoned the REINFORCE signal.
     current_pitch = player.get('pitch', 0)
-    
-    # Reward decreases as pitch moves away from 0
-    # pitch = 0° → reward = 0.1 (best)
-    # pitch = ±30° → reward = 0.05
-    # pitch = ±60° → reward = 0.0
-    # pitch = ±90° → reward = -0.05 (penalty!)
     pitch_error = abs(current_pitch)
     
-    if pitch_error <= 60.0:
-        # Positive reward when pitch is reasonable
-        pitch_quality = 1.0 - (pitch_error / 60.0)
-        pitch_reward = pitch_quality * 0.3
-    else:
-        # Penalty when looking too far up/down
-        # Linearly increases penalty from -60° to -90°
-        penalty_amount = (pitch_error - 60.0) / 30.0  # 0.0 at 60°, 1.0 at 90°
-        pitch_reward = -0.15 * min(penalty_amount, 1.0)
+    # pitch=0° → 0.15, pitch=45° → 0.075, pitch=90° → 0.0
+    pitch_reward = max(0.0, (1.0 - pitch_error / 90.0) * 0.15)
     
     events.append({
         "type": "pitch_control",
@@ -590,33 +579,8 @@ async def predict_action(version: str, request: Request):
     bot_states[bot_name]["latest_observation"] = observation
     bot_states[bot_name]["latest_observation_time"] = datetime.now().isoformat()
     
-    # Calculate automatic rewards based on observation (looking at targets, etc.)
-    # This gives continuous rewards for good behavior that the mod might not track
-    # These are ADDITIONAL rewards - mod can still send its own rewards via /add-reward/
-    # Auto-rewards supplement mod-sent rewards (e.g., mod sends damage_dealt, we add good_aim)
-    auto_reward_events = calculate_auto_rewards(bot_name, observation)
-    if auto_reward_events:
-        # Log auto-calculated rewards for frontend display
-        if bot_name not in bot_reward_events:
-            bot_reward_events[bot_name] = []
-        
-        for event in auto_reward_events:
-            event_log = {
-                "timestamp": datetime.now().isoformat(),
-                "bot_name": bot_name,
-                "event": event.copy(),
-                "source": "auto_calculated"  # Mark as auto-calculated
-            }
-            bot_reward_events[bot_name].append(event_log)
-            
-            # Keep only the most recent events
-            if len(bot_reward_events[bot_name]) > MAX_REWARD_EVENTS_PER_BOT:
-                bot_reward_events[bot_name] = bot_reward_events[bot_name][-MAX_REWARD_EVENTS_PER_BOT:]
-        
-        agent = fast_rl_agent if fast_rl_agent else ppo_agent
-        if agent:
-            # Add auto-rewards - these supplement mod-sent rewards
-            agent.add_reward(bot_name, observation, auto_reward_events)
+    # Auto-rewards are calculated AFTER action prediction (inside v0.1 handler)
+    # so they're credited to the current step, not the previous one.
     
     # Track tick timing for TPS calculation
     current_time = time.time()
@@ -719,8 +683,24 @@ async def predict_action(version: str, request: Request):
                 bot_cached_obs_vector[bot_name] = fast_rl_agent.observations[-1].copy()
                 bot_last_observation_hash[bot_name] = obs_hash
             
+            # Auto-rewards applied AFTER prediction so they credit the current step
+            auto_reward_events = calculate_auto_rewards(bot_name, observation)
+            if auto_reward_events:
+                if bot_name not in bot_reward_events:
+                    bot_reward_events[bot_name] = []
+                for event in auto_reward_events:
+                    bot_reward_events[bot_name].append({
+                        "timestamp": datetime.now().isoformat(),
+                        "bot_name": bot_name,
+                        "event": event.copy(),
+                        "source": "auto_calculated"
+                    })
+                if len(bot_reward_events[bot_name]) > MAX_REWARD_EVENTS_PER_BOT:
+                    bot_reward_events[bot_name] = bot_reward_events[bot_name][-MAX_REWARD_EVENTS_PER_BOT:]
+                fast_rl_agent.add_reward(bot_name, observation, auto_reward_events)
+            
             pred_time = time.time() - pred_start
-            if pred_time > 0.1:  # Warn if >100ms
+            if pred_time > 0.1:
                 print(f"[PREDICT] Fast RL prediction took {pred_time*1000:.1f}ms for {bot_name} (target: <50ms)")
             sys.stdout.flush()
             bot_last_actions[bot_name] = action
@@ -1124,13 +1104,15 @@ async def add_reward(request: Request):
         if len(bot_reward_events[bot_name]) > MAX_REWARD_EVENTS_PER_BOT:
             bot_reward_events[bot_name] = bot_reward_events[bot_name][-MAX_REWARD_EVENTS_PER_BOT:]
     
-    # Add reward to agent
+    # Only add rewards to training buffer for bots running the RL model.
+    # Bots on other versions (e.g., 0.0 calibration) would contaminate the
+    # shared buffer since their reward events get attributed to whichever
+    # step was stored last (which belongs to a different bot).
+    bot_version = bot_model_mapping.get(bot_name, "0.0")
     agent = fast_rl_agent if fast_rl_agent else ppo_agent
-    if agent and events:
-        # Use current_state if provided, otherwise use stored state
+    if agent and events and bot_version == "0.1":
         state_to_use = current_state if current_state else bot_states.get(bot_name, {})
         agent.add_reward(bot_name, state_to_use, events)
-        agent.add_done(False)  # Not done unless explicitly set
     
     return {
         "status": "success",
