@@ -1,11 +1,7 @@
 package net.famzangl.minecraft.minebot.ai;
 
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-
 import net.famzangl.minecraft.minebot.PhysicsController;
+import net.famzangl.minecraft.minebot.ai.cambiumInputs.APIClient;
 import net.famzangl.minecraft.minebot.ai.command.AIChatController;
 import net.famzangl.minecraft.minebot.ai.strategy.cambium.RLControllerStrategy;
 import net.minecraft.client.entity.EntityPlayerSP;
@@ -38,37 +34,13 @@ public class ChatListener {
             String name = (player != null) ? player.getName() : "Unknown";
 
             try {
-					// URL of the Python API - use service name for Docker Compose networking
-					String string_url = "http://backend:8000/bot-setup";
-					URL url = new URL(string_url);
-					System.out.println("attempting to connect to: " + string_url );
-					HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-		
-					// Set up the HTTP connection
-					conn.setRequestMethod("POST");
-					conn.setRequestProperty("Content-Type", "application/json");
-					conn.setDoOutput(true);
-		
-					// Send JSON payload
                     String jsonInputString = "{\"name\":\"" + name + "\"}";
-					OutputStream os = conn.getOutputStream();
-					os.write(jsonInputString.getBytes("UTF-8"));
-					os.close();
-		
-					// Get response
-					InputStream is = conn.getResponseCode() == HttpURLConnection.HTTP_OK
-									 ? conn.getInputStream()
-									 : conn.getErrorStream();
-		
-					byte[] buffer = new byte[1024];
-					int bytesRead;
-					StringBuilder response = new StringBuilder();
-					while ((bytesRead = is.read(buffer)) != -1) {
-						response.append(new String(buffer, 0, bytesRead, "UTF-8"));
-					}
-					is.close();
-					
-					AIChatController.addChatLine("Bot " + name + " added to game!");
+                    String response = APIClient.postRequest("/bot-setup", jsonInputString);
+                    if (response != null) {
+                        AIChatController.addChatLine("Bot " + name + " added to game!");
+                    } else {
+                        AIChatController.addChatLine("Error: No response from backend");
+                    }
                 } catch (Exception e) {
 					AIChatController.addChatLine("Error: " + e.toString());
 					e.printStackTrace();

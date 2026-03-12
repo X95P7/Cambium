@@ -32,39 +32,106 @@ Cambium is a reinforcement learning system that trains Minecraft bots to fight i
 3. Backend runs the RL model, returns an action (movement, attack, look direction)
 4. Mod executes the action via `PhysicsController` (sets keys, applies delta yaw/pitch)
 5. `RewardListener` detects combat events (damage dealt/taken, aim quality) and sends to `POST /add-reward/`
-6. Every 100 ticks, the backend runs backpropagation on collected experience
+6. Every 200 ticks (or every 15 seconds, whichever comes first), the backend runs backpropagation on collected experience
 
 ## Prerequisites
 
-- **Docker Desktop** (with Docker Compose)
-- **Java JDK 8** (for building the mod)
+- **Docker Desktop** (with Docker Compose v2)
+- **Java JDK 8** (for building the mod — Forge 1.8.9 requires JDK 8, not newer)
 - **Git**
 
-## Quick Start
+> **JDK 8 only**: The mod will not compile with JDK 11+. On Windows, download [Adoptium/Temurin JDK 8](https://adoptium.net/temurin/releases/?version=8) and make sure `JAVA_HOME` points to it before running Gradle.
+
+## Quick Start (Full Setup from Scratch)
+
+### 1. Clone the repo
 
 ```bash
-# 1. Clone the repo
 git clone <repo-url> Cambium
 cd Cambium
-
-# 2. Build the mod (requires JDK 8)
-cd mod/CambiumMod
-./gradlew clean build        # Linux/Mac
-# gradlew.bat clean build    # Windows
-cd ../..
-
-# 3. Copy the built mod JAR to the headlessmc mods folder
-cp mod/CambiumMod/build/libs/CambiumMod-1.0.jar headlessmc/mods/
-
-# 4. Start everything
-docker compose up --build -d
-
-# 5. Wait ~2 minutes for the Minecraft server and clients to start
-# Watch logs with:
-docker compose logs -f
 ```
 
-Once the bots connect to the server, they need to be activated via in-game chat commands (sent automatically or via RCON). See [Bot Chat Commands](#bot-chat-commands) below.
+### 2. Build the mod (requires JDK 8)
+
+```bash
+cd mod/CambiumMod
+
+# Linux/Mac:
+./gradlew clean build
+
+# Windows (PowerShell):
+.\gradlew.bat clean build
+
+cd ../..
+```
+
+The output JAR is at `mod/CambiumMod/build/libs/CambiumMod-1.0.jar`.
+
+> **First build** may take 5-10 minutes while Gradle downloads Forge and MCP mappings. Subsequent builds are faster (~30s).
+
+### 3. Copy the mod JAR to the headlessmc mods folder
+
+```bash
+# Linux/Mac:
+cp mod/CambiumMod/build/libs/CambiumMod-1.0.jar headlessmc/mods/
+
+# Windows (PowerShell):
+Copy-Item mod\CambiumMod\build\libs\CambiumMod-1.0.jar headlessmc\mods\ -Force
+```
+
+This is required before building the Docker containers because the headlessmc Dockerfile copies everything in `headlessmc/mods/` into the client image.
+
+### 4. Start all services
+
+```bash
+docker compose up --build -d
+```
+
+This builds and starts 4 containers:
+- `mc-forge` — Minecraft 1.8.9 Forge server (takes ~1-2 min to start)
+- `backend` — FastAPI backend with the RL model
+- `headlessmc1` — Bot1 client
+- `headlessmc2` — Bot2 client
+
+### 5. Wait for startup and verify
+
+```bash
+# Watch all logs (Ctrl+C to stop watching):
+docker compose logs -f
+
+# Or check individual services:
+docker compose logs -f mc-forge        # Server ready when you see "Done (X.XXXs)!"
+docker compose logs -f backend         # Should show "Fast RL agent initialized"
+docker compose logs -f headlessmc1     # Should show "Sent connect command"
+```
+
+Startup takes ~2-3 minutes. The headlessmc clients wait for the server before connecting.
+
+### 6. Activate the bots
+
+Once both clients are connected to the server, send these commands via RCON (or type in server console):
+
+```bash
+# Using docker exec to send RCON commands:
+docker exec mc-forge rcon-cli --password minecraft "say &setup"
+# Wait 5 seconds for both bots to register and pair
+docker exec mc-forge rcon-cli --password minecraft "say &bot-setup"
+# Wait 2 seconds
+docker exec mc-forge rcon-cli --password minecraft "say &run"
+```
+
+Or connect to the server as a player and type in chat:
+1. `&setup` — registers both bots, pairs them, starts a duel
+2. `&bot-setup` — loads action/observation config and model version
+3. `&run` — starts the RL controller loop
+
+### 7. Monitor training
+
+Open the dashboard at **http://localhost:8000** to see:
+- Bot status and tick rates
+- Reward progression graphs
+- Training loss over time
+- Reward event breakdown
 
 ## Project Structure
 
@@ -103,19 +170,28 @@ Cambium/
 │   ├── Dockerfile              # Builds HeadlessMC + Forge 1.8.9
 │   ├── entrypoint.sh           # Startup script (wait for server, connect, etc.)
 │   └── mods/                   # Mod JARs copied into client containers
-│       └── CambiumMod-1.0.jar
-└── server/                     # Minecraft server data (mounted volume)
+│       └── CambiumMod-1.0.jar  # ← Must exist before `docker compose build`
+├── server/                     # Minecraft server data (mounted volume)
+│   ├── server.properties       # Server config (online-mode=false, pvp=true, etc.)
+│   └── ops.json                # OP'd players (Bot1 needs OP for some commands)
+└── rosie/                      # MSOE Rosie HPC deployment files
 ```
 
 ## Build & Deploy
 
 ### Build the mod
 
-The mod must be compiled with JDK 8 (Forge 1.8.9 requirement):
+The mod must be compiled with **JDK 8** (Forge 1.8.9 requirement):
 
 ```bash
 cd mod/CambiumMod
-./gradlew clean build
+
+# Verify JDK version (must be 1.8.x):
+java -version
+
+# Build:
+./gradlew clean build        # Linux/Mac
+.\gradlew.bat clean build    # Windows
 ```
 
 The output JAR is at `mod/CambiumMod/build/libs/CambiumMod-1.0.jar`.
@@ -125,7 +201,11 @@ The output JAR is at `mod/CambiumMod/build/libs/CambiumMod-1.0.jar`.
 Copy the JAR into the headlessmc mods folder so the Docker build picks it up:
 
 ```bash
+# Linux/Mac:
 cp mod/CambiumMod/build/libs/CambiumMod-1.0.jar headlessmc/mods/
+
+# Windows (PowerShell):
+Copy-Item mod\CambiumMod\build\libs\CambiumMod-1.0.jar headlessmc\mods\ -Force
 ```
 
 ### Start the system
@@ -135,8 +215,8 @@ cp mod/CambiumMod/build/libs/CambiumMod-1.0.jar headlessmc/mods/
 docker compose up --build -d
 
 # Or rebuild only specific services:
-docker compose up -d --build backend              # Backend only
-docker compose up -d --build headlessmc1 headlessmc2  # Clients only (after mod rebuild)
+docker compose up -d --build backend                    # Backend only
+docker compose up -d --build headlessmc1 headlessmc2    # Clients only (after mod rebuild)
 ```
 
 ### Stop the system
@@ -155,6 +235,22 @@ docker compose logs -f headlessmc1      # Bot1 only
 docker compose logs -f mc-forge         # Minecraft server only
 ```
 
+## Server Configuration
+
+The Minecraft server runs in offline mode with these key settings (in `server/server.properties`):
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| `online-mode` | `false` | Headless clients use offline accounts |
+| `pvp` | `true` | Required for bots to fight each other |
+| `spawn-monsters` | `false` | No mobs interfering with duels |
+| `spawn-animals` | `false` | No animals interfering with duels |
+| `allow-flight` | `true` | Prevents kick for movement glitches |
+| `enable-rcon` | `true` | Backend sends commands via RCON |
+| `rcon.password` | `minecraft` | Must match `RCON_PASSWORD` in `docker-compose.yml` |
+
+Bot commands (`/give`, `/tp`, `/effect`, etc.) are sent via RCON which runs as the server console with full permissions. The bots themselves don't need to be OP.
+
 ## Bot Chat Commands
 
 Once a bot's Minecraft client is connected to the server, it responds to chat commands prefixed with `&`:
@@ -171,7 +267,7 @@ Once a bot's Minecraft client is connected to the server, it responds to chat co
 2. `&bot-setup` — load config
 3. `&run` — start the RL loop
 
-These can be sent via RCON or typed in chat by any player on the server.
+These can be sent via RCON or typed in chat by any player on the server. All bots on the server respond to the same command (so `&setup` registers all connected bots at once).
 
 ## Backend API
 
@@ -230,20 +326,31 @@ Open `http://localhost:8000` in a browser to see:
 |--------|------|-------|-------------|
 | Mod | `damage_dealt` | +0 to +10 | Scaled by % of target's max health |
 | Mod | `damage_taken` | -0 to -10 | Penalty for taking damage |
-| Mod | `good_aim` | +0.05 to +1.0 | How accurately the bot aims at the enemy |
+| Mod | `good_aim` | +0.2 to +1.0 | Aim at enemy body center, sustained ~200ms (no reward for sweep-through or 45-90° cone) |
 | Mod | `won_duel` | +10 | Bot's opponent died |
 | Mod | `death` | -1 | Bot died |
 | Auto | `proximity` | 0 to +0.1 | Reward for being close to the enemy |
 | Auto | `pitch_control` | 0 to +0.15 | Reward for keeping pitch level |
+| Auto | `extreme_pitch_penalty` | -0.05 | Penalty when \|pitch\| > 60° |
+| Auto | `aim_hold` | +0.2 | Bonus when on target AND pitch is level |
+| Auto | `episode_timeout` | -0.1 | Penalty when episode reaches 15s cap |
 
 ### Training
 
 - **Algorithm**: REINFORCE (policy gradient with reward-to-go)
-- **Backprop interval**: Every 100 ticks (~5 seconds at 20 TPS)
+- **Backprop interval**: Every 200 ticks, or on death, or on 15-second episode timeout
+- **Episode length cap**: 15 seconds — both bots are reset (healed, re-kitted, teleported) on timeout
 - **Batch size**: 64 minimum samples
-- **Discount**: gamma = 0.99 with episode boundary resets
-- **Entropy bonus**: 0.01 (encourages exploration)
+- **Discount**: gamma = 0.99 with episode boundary resets (`done` flag)
+- **Entropy bonus**: 0.02 (encourages exploration, prevents degenerate spinning)
 - **Gradient clipping**: max_norm = 1.0
+
+### Episode Lifecycle
+
+Episodes end when any of these occur:
+1. **Bot dies** — death reward, backprop, both bots reset and start new duel
+2. **15-second timeout** — timeout penalty for both bots, backprop, both bots healed/teleported/re-kitted
+3. **200-tick backprop interval** — trains on accumulated experience, clears buffer
 
 ## Model Versions
 
@@ -270,26 +377,77 @@ docker compose logs headlessmc1      # Check client startup
 docker compose logs mc-forge         # Check server status
 ```
 
+The headlessmc containers wait for the server port to be open before connecting. If the server is slow to start, the client retries automatically.
+
 ### Bots not fighting
 Make sure both bots have run `&setup`, `&bot-setup`, and `&run`. Check the dashboard at `http://localhost:8000` to see bot status.
 
 ### Training not improving
 Check the `/reward-progression` endpoint or the dashboard. Key things to look for:
-- `total_rewards` should generally trend upward
+- `avg_reward_per_sample` should generally trend upward
 - `good_aim` reward should be positive (bot is looking at enemy)
 - `pitch_control` should be positive (bot isn't staring at sky/ground)
+- `aim_hold` should appear when the bot holds aim with level pitch
 - Make sure the learning bot is on version `0.1`
+
+### Bot stuck repeating same action / stopped sending data
+After long runs (e.g. overnight), the API connection can fail (timeout, backend restart, Docker network). Fixes applied:
+- **Idle fallback**: When the API returns null, the mod resets to idle (stand still) instead of repeating the last action
+- **Retries**: API requests retry up to 2 times with 100ms delay before giving up
+- **Shorter timeouts**: 3s connect, 5s read so failures are detected faster
+- **15s episode cap**: Forces a reset even if neither bot dies, preventing indefinite stuck states
+
+### Bot spinning in circles or looking down
+If the bot learned a degenerate policy (spinning while looking at ground), the reward system includes:
+- **aim_hold**: Bonus when on target AND pitch is level (rewards holding aim over sweeping)
+- **extreme_pitch_penalty**: Penalty when |pitch| > 60°
+- **Entropy bonus 0.02**: Discourages premature convergence to degenerate policies
+
+**After backend reward changes, reset to train from scratch:**
+```bash
+docker compose down
+docker compose up --build -d
+# Then run &setup, &bot-setup, &run in-game again
+```
 
 ### Rebuilding after code changes
 
 ```bash
-# If you changed Python backend code:
+# If you changed Python backend code only:
+docker compose stop backend
 docker compose up -d --build backend
 
 # If you changed Java mod code:
 cd mod/CambiumMod
-./gradlew clean build
-cp build/libs/CambiumMod-1.0.jar ../../headlessmc/mods/
+./gradlew clean build                                        # Linux/Mac
+# .\gradlew.bat clean build                                  # Windows
+cp build/libs/CambiumMod-1.0.jar ../../headlessmc/mods/      # Linux/Mac
+# Copy-Item build\libs\CambiumMod-1.0.jar ..\..\headlessmc\mods\ -Force  # Windows
 cd ../..
+docker compose stop headlessmc1 headlessmc2
 docker compose up -d --build headlessmc1 headlessmc2
+# Then run &setup, &bot-setup, &run again
+```
+
+### Full reset (nuclear option)
+
+If things are broken and you want to start completely fresh:
+
+```bash
+docker compose down -v                  # Stop everything and delete volumes
+# Rebuild mod if needed (see above)
+docker compose up --build -d            # Rebuild all images and start
+# Wait 2-3 min, then activate bots: &setup, &bot-setup, &run
+```
+
+## Running on Rosie (MSOE HPC)
+
+Cambium can run on MSOE's Rosie cluster for faster training with more bots and GPU acceleration. See [rosie/README.md](rosie/README.md) for full instructions.
+
+```bash
+# One-time setup
+bash rosie/setup.sh
+
+# Submit training job (default 4 bots)
+sbatch rosie/cambium.sbatch
 ```

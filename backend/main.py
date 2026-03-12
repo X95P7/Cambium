@@ -1,3 +1,4 @@
+import math
 import os
 import time
 from datetime import datetime, timedelta
@@ -103,12 +104,13 @@ try:
     # regardless of observation_space_config, so we hardcode it here
     obs_dim = 194
     # Remove act_dim - not needed anymore
+    rl_device = os.getenv("CAMBIUM_DEVICE", "cpu")
     fast_rl_agent = FastRLAgent(
         observation_dim=obs_dim,
-        device='cpu',
+        device=rl_device,
         hidden_dim=256
     )
-    print(f"Fast RL agent initialized successfully: obs_dim={obs_dim}")
+    print(f"Fast RL agent initialized successfully: obs_dim={obs_dim}, device={rl_device}")
     ppo_agent = None
 except Exception as e:
     print(f"ERROR initializing Fast RL agent: {e}")
@@ -128,6 +130,10 @@ MAX_REWARD_EVENTS_PER_BOT = 100  # Keep last 100 reward events per bot
 # Tick counting for backprop
 bot_tick_counts = {}  # bot_name -> tick count
 BACKPROP_INTERVAL = 200  # Train every 200 ticks (more samples = lower variance)
+
+# Episode length cap - force episode end after N seconds (prevents 10-15 min duels)
+episode_start_time = None  # wall-clock when current episode started (buffer first entry)
+MAX_EPISODE_LENGTH_SEC = 15
 
 # Tick timing tracking for TPS calculation
 tick_times = {}  # bot_name -> list of timestamps
@@ -211,8 +217,6 @@ def calculate_auto_rewards(bot_name: str, observation: Dict) -> List[Dict]:
     # === REWARD 2: Pitch Control ===
     # Reward for keeping pitch level (looking straight ahead).
     # Non-negative only: positive when pitch is reasonable, zero when extreme.
-    # Negative penalties caused the total reward to go deeply negative when
-    # pitch drifted (accumulated deltas), which poisoned the REINFORCE signal.
     current_pitch = player.get('pitch', 0)
     pitch_error = abs(current_pitch)
     
@@ -223,6 +227,37 @@ def calculate_auto_rewards(bot_name: str, observation: Dict) -> List[Dict]:
         "type": "pitch_control",
         "amount": pitch_reward
     })
+    
+    # === REWARD 3: Extreme Pitch Penalty ===
+    # Penalize looking at sky/ground (|pitch| > 60°) to discourage spinning-while-looking-down.
+    if pitch_error > 60.0:
+        events.append({
+            "type": "extreme_pitch_penalty",
+            "amount": -0.05
+        })
+    
+    # === REWARD 4: Aim Hold ===
+    # Bonus when bot is on target AND pitch is level. Rewards "holding aim" over "sweeping past".
+    # Only fires when both conditions met: angle to enemy < 20° and |pitch| < 30°.
+    # Target uses body center (relativeY + 0.9) to match mod's aim calculation for melee hitbox.
+    if nearest_enemy is not None and pitch_error < 30.0:
+        dx = nearest_enemy.get('relativeX', 0)
+        dy = nearest_enemy.get('relativeY', 0) + 0.9  # Aim at body center, not feet
+        dz = nearest_enemy.get('relativeZ', 0)
+        horizontal_dist = (dx**2 + dz**2)**0.5
+        if horizontal_dist > 0.1:
+            target_yaw = math.atan2(-dx, dz) * 180.0 / math.pi
+            target_pitch = -math.atan2(dy, horizontal_dist) * 180.0 / math.pi
+            player_yaw = normalize_yaw(player.get('yaw', 0))
+            target_yaw_norm = normalize_yaw(target_yaw)
+            yaw_diff = abs(normalize_yaw(player_yaw - target_yaw_norm))
+            pitch_diff = abs(current_pitch - target_pitch)
+            max_angle = max(yaw_diff, pitch_diff)
+            if max_angle < 20.0:
+                events.append({
+                    "type": "aim_hold",
+                    "amount": 0.2
+                })
     
     return events
 
@@ -396,6 +431,9 @@ async def trigger_backprop(bot_name: str = None):
             print(f"Training with {total_samples} samples, but no actions recorded!")
         
         stats = agent.train(batch_size=64, epochs=4)
+        # Reset episode timer after buffer clear (train clears buffers)
+        global episode_start_time
+        episode_start_time = time.time()
         print(f"Backprop completed for {bot_name or 'all bots'}: loss={stats.get('loss', 0):.6f}, "
               f"policy_loss={stats.get('policy_loss', 0):.6f}, entropy={stats.get('entropy', 0):.4f}")
         
@@ -470,10 +508,16 @@ async def trigger_backprop(bot_name: str = None):
                                     amount = event.get('amount', 0)
                                 elif event_type == 'pitch_control':
                                     amount = event.get('amount', 0)
+                                elif event_type == 'extreme_pitch_penalty':
+                                    amount = event.get('amount', -0.05)
+                                elif event_type == 'aim_hold':
+                                    amount = event.get('amount', 0.2)
                                 elif event_type == 'won_duel':
                                     amount = 10.0
                                 elif event_type == 'death':
                                     amount = -1.0
+                                elif event_type == 'episode_timeout':
+                                    amount = event.get('amount', -0.1)
                                 reward_type_data[event_type]['amount'] += amount
                     except (ValueError, TypeError):
                         continue
@@ -531,6 +575,33 @@ async def trigger_backprop(bot_name: str = None):
         import traceback
         traceback.print_exc()
         return {"status": "error", "message": str(e)}
+
+async def _reset_bots_after_timeout(bot):
+    """Reset both bots after episode timeout - mirrors the death handler reset."""
+    try:
+        if bot is None:
+            return
+        # Open arena
+        if hasattr(bot, 'arena') and bot.arena:
+            bot.arena.status = "open"
+        # Reset both bots and start new duel
+        if hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
+            bot.updateBot("ready")
+            bot.pair.updateBot("ready")
+            await giveKit(bot)
+            await giveKit(bot.pair)
+            await send_mc_command(f"/effect {bot.name} minecraft:instant_health 1 100")
+            await send_mc_command(f"/effect {bot.pair.name} minecraft:instant_health 1 100")
+            await fightBots(bot, bot.pair)
+            await send_mc_command(f"/say Episode timeout! Resetting {bot.name} and {bot.pair.name}.")
+        else:
+            bot.updateBot("ready")
+            await giveKit(bot)
+            await send_mc_command(f"/effect {bot.name} minecraft:instant_health 1 100")
+    except Exception as e:
+        print(f"[RESET] Error resetting bots after timeout: {e}")
+        import traceback
+        traceback.print_exc()
 
 @app.post("/send-command/")
 async def send_command(command: str):
@@ -668,7 +739,37 @@ async def predict_action(version: str, request: Request):
         action = None
         try:
             pred_start = time.time()
-            
+
+            # Episode length cap: force episode end after 15 seconds
+            global episode_start_time
+            if episode_start_time is None:
+                episode_start_time = time.time()
+            elif len(fast_rl_agent.observations) > 0 and (time.time() - episode_start_time) >= MAX_EPISODE_LENGTH_SEC:
+                # Timeout - end episode and reset both bots (same as death)
+                timeout_event = {"type": "episode_timeout", "amount": -0.1}
+                bot = getBotByName(bot_name)
+
+                # Add timeout reward + done for this bot
+                state = bot_states[bot_name].get("current_state", bot_states[bot_name].get("latest_observation", {}))
+                fast_rl_agent.add_reward(bot_name, state, [timeout_event])
+                fast_rl_agent.add_done(True)
+
+                # Add timeout reward + done for the paired bot too
+                if bot and hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
+                    pair_name = bot.pair.name
+                    if pair_name in bot_states:
+                        fast_rl_agent.add_reward(pair_name, bot_states[pair_name], [timeout_event])
+                        fast_rl_agent.add_done(True)
+
+                asyncio.create_task(trigger_backprop(f"episode_timeout_{bot_name}"))
+                episode_start_time = time.time()
+                print(f"[PREDICT] Episode timeout ({MAX_EPISODE_LENGTH_SEC}s) for {bot_name}, resetting both bots")
+                sys.stdout.flush()
+
+                # Reset bots: give kits, heal, teleport (same as death handler)
+                asyncio.create_task(_reset_bots_after_timeout(bot))
+
+
             # Use cached observation vector if available and observation hasn't changed
             cached_vector = None
             if bot_name in bot_last_observation_hash and bot_name in bot_cached_obs_vector:
@@ -1401,10 +1502,16 @@ async def get_reward_progression():
                                                         amount = event.get('amount', 0)
                                                     elif event_type == 'pitch_control':
                                                         amount = event.get('amount', 0)
+                                                    elif event_type == 'extreme_pitch_penalty':
+                                                        amount = event.get('amount', -0.05)
+                                                    elif event_type == 'aim_hold':
+                                                        amount = event.get('amount', 0.2)
                                                     elif event_type == 'won_duel':
                                                         amount = 10.0
                                                     elif event_type == 'death':
                                                         amount = -1.0
+                                                    elif event_type == 'episode_timeout':
+                                                        amount = event.get('amount', -0.1)
                                                     reward_types[event_type]['amount'] += amount
                                         except (ValueError, TypeError) as e:
                                             continue

@@ -34,6 +34,8 @@ public class RewardListener {
     // Track aim checking
     private long lastAimCheckTime = 0;
     private static final long AIM_CHECK_INTERVAL_MS = 100; // Check aim every 100ms
+    private int consecutiveAimChecks = 0; // Require sustained aim (2+ checks) to reduce sweep-through rewards
+    private static final int AIM_SUSTAINED_THRESHOLD = 2; // Must be on target for 2 checks (~200ms) before rewarding
     
     // Track damage detection via tick
     private long lastDamageCheckTime = 0;
@@ -210,9 +212,10 @@ public class RewardListener {
         }
         
         if (closestEnemy != null) {
-            // Calculate angle to enemy
+            // Calculate angle to enemy - use BODY CENTER (posY + 0.9) not feet for melee hit accuracy
+            double targetY = closestEnemy.field_70163_u + 0.9; // Approximate center of player hitbox
             double dx = closestEnemy.field_70165_t - player.field_70165_t;
-            double dy = closestEnemy.field_70163_u - player.field_70163_u;
+            double dy = targetY - (player.field_70163_u + player.func_70047_e()); // Aim from our eyes to their body center
             double dz = closestEnemy.field_70161_v - player.field_70161_v;
             
             // Calculate target yaw (angle in horizontal plane)
@@ -257,12 +260,12 @@ public class RewardListener {
                 }
             }
             
-            // Calculate aim score (percentage-based, same as backend)
+            // Calculate aim score (percentage-based)
             // Perfect aim (within 5 degrees) = 1.0
             // Within 10 degrees = 0.8
             // Within 20 degrees = 0.5
             // Within 45 degrees = 0.2
-            // Within 90 degrees = 0.05
+            // Narrower cone: no reward for 45-90° to avoid reinforcing "sweeping past"
             double aimScore = 0.0;
             if (maxAngle < 5) {
                 aimScore = 1.0;
@@ -272,25 +275,28 @@ public class RewardListener {
                 aimScore = 0.5;
             } else if (maxAngle < 45) {
                 aimScore = 0.2;
-            } else if (maxAngle < 90) {
-                aimScore = 0.05;
             }
+            // maxAngle >= 45: no reward (was 0.05 for 45-90° - removed to discourage spinning)
             
-            // Only send good_aim event if score > 0 (bot is looking roughly at enemy)
             if (aimScore > 0) {
-                JsonArray events = new JsonArray();
-                JsonObject aimEvent = new JsonObject();
-                aimEvent.addProperty("type", "good_aim");
-                aimEvent.addProperty("amount", aimScore); // Percentage-based score (0.0 to 1.0)
-                aimEvent.addProperty("yaw_diff", yawDiff);
-                aimEvent.addProperty("pitch_diff", pitchDiff);
-                aimEvent.addProperty("distance", closestDistance);
-                events.add(aimEvent);
-                
-                // Debug log (commented out to reduce spam - uncomment if needed)
-                // System.out.println("[RewardListener] Good aim detected: score=" + aimScore + ", yaw_diff=" + yawDiff + ", pitch_diff=" + pitchDiff);
-                sendRewardEvents(events);
+                consecutiveAimChecks++;
+                // Only send good_aim when sustained on target (2+ checks = ~200ms) to avoid rewarding sweep-through
+                if (consecutiveAimChecks >= AIM_SUSTAINED_THRESHOLD) {
+                    JsonArray events = new JsonArray();
+                    JsonObject aimEvent = new JsonObject();
+                    aimEvent.addProperty("type", "good_aim");
+                    aimEvent.addProperty("amount", aimScore);
+                    aimEvent.addProperty("yaw_diff", yawDiff);
+                    aimEvent.addProperty("pitch_diff", pitchDiff);
+                    aimEvent.addProperty("distance", closestDistance);
+                    events.add(aimEvent);
+                    sendRewardEvents(events);
+                }
+            } else {
+                consecutiveAimChecks = 0; // Reset when we lose the target
             }
+        } else {
+            consecutiveAimChecks = 0; // No enemy in range
         }
     }
     

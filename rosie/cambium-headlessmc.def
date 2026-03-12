@@ -1,0 +1,62 @@
+Bootstrap: docker
+From: eclipse-temurin:8-jdk
+
+%labels
+    Author Cambium Project
+    Description HeadlessMC client for Minecraft 1.8.9 Forge with Cambium mod
+
+%environment
+    export MC_VERSION=1.8.9
+    export HMC_VERSION=2.5.1
+    export FORGE_REGEX="forge:1.8.9"
+    export HEADLESSMC_COMMAND="--jvm -Djava.awt.headless=true"
+    export HOME=/root
+    export USERNAME=Player
+    export EMAIL=
+    export PASSWORD=
+    export SERVER=
+
+%post
+    MC_VERSION=1.8.9
+    HMC_VERSION=2.5.1
+
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      netcat-openbsd expect \
+      xvfb xauth x11-xserver-utils wget \
+      libxext6 libxrender1 libxtst6 libxi6 libxt6 libx11-6 \
+      libfontconfig1 libfreetype6 libasound2t64 \
+    && rm -rf /var/lib/apt/lists/*
+
+    mkdir -p /opt/hmc/run/mods
+    cd /opt/hmc
+
+    cat > config.properties <<EOF
+hmc.java.versions=$JAVA_HOME/bin/java
+hmc.gamedir=/opt/hmc/run
+hmc.offline=true
+hmc.rethrow.launch.exceptions=true
+hmc.exit.on.failed.command=false
+hmc.assets.dummy=true
+EOF
+
+    wget -qO headlessmc-launcher-${HMC_VERSION}.jar \
+        https://github.com/3arthqu4ke/headlessmc/releases/download/${HMC_VERSION}/headlessmc-launcher-${HMC_VERSION}.jar
+
+    java -jar headlessmc-launcher-${HMC_VERSION}.jar --command download ${MC_VERSION}
+    java -jar headlessmc-launcher-${HMC_VERSION}.jar --command forge ${MC_VERSION} --java $JAVA_HOME/bin/java
+
+    find /opt/hmc/HeadlessMC -name 'liblwjgl*.so' -exec execstack -c {} \; 2>/dev/null || true
+
+    mkdir -p /root/.minecraft/mods
+
+%files
+    ../headlessmc/entrypoint.sh /opt/hmc/entrypoint.sh
+    ../headlessmc/mods/ /opt/hmc/run/mods/
+    ../headlessmc/mods/ /root/.minecraft/mods/
+
+%post
+    chmod +x /opt/hmc/entrypoint.sh
+
+%runscript
+    exec /opt/hmc/entrypoint.sh "$@"

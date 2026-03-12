@@ -235,10 +235,16 @@ class FastRLAgent:
                 reward_amount = event.get('amount', 0)
             elif event_type == 'pitch_control':
                 reward_amount = event.get('amount', 0)
+            elif event_type == 'extreme_pitch_penalty':
+                reward_amount = event.get('amount', -0.05)
+            elif event_type == 'aim_hold':
+                reward_amount = event.get('amount', 0.2)
             elif event_type == 'won_duel':
                 reward_amount = 10.0
             elif event_type == 'death':
                 reward_amount = -1.0
+            elif event_type == 'episode_timeout':
+                reward_amount = event.get('amount', -0.1)
             
             if event_type:  # Only track if event has a type
                 # Track both count and amount
@@ -360,7 +366,7 @@ class FastRLAgent:
                    attack_dist.entropy() + yaw_dist.entropy() + 
                    pitch_dist.entropy()).mean()
         
-        entropy_bonus = 0.01
+        entropy_bonus = 0.02  # Increased from 0.01 to prevent premature convergence to degenerate policies
         entropy_loss = -entropy_bonus * entropy
         
         # Total loss
