@@ -165,58 +165,70 @@ sleep 5
 
 
 # Parse SERVER environment variable (format: host:port or just host)
+set host ""
+set port "25565"
 if {[info exists env(SERVER)] && [string length $env(SERVER)] > 0} {
   set server $env(SERVER)
-  if {[regexp {^([^:]+):?(\d+)?$} $server match host port]} {
-    if {$port == ""} {
-      set port "25565"
-    }
-    puts "Attempting to connect to $host:$port"
-    # Send connect command - ensure we're sending to the right process
-    sleep 1
-    send "connect $host $port\r"
-    send_user "Sent connect command: connect $host $port\n"
-   
-    # Wait for connection to establish - look for connection messages or wait
-    puts "Waiting for connection to establish..."
-    sleep 15
-   
-    # Send chat message - wait a bit more to ensure we're connected
-    puts "Sending chat message..."
-    sleep 2
-    send "say Hello, world!\r"
-    send "gui"
-    send_user "Sent say command: say Hello, world!\n"
+  if {[regexp {^([^:]+):(\d+)$} $server match h p]} {
+    set host $h
+    set port $p
+  } elseif {[regexp {^([^:]+)$} $server match h]} {
+    set host $h
   } else {
-    # Fallback: try to use SERVER as-is, but split on colon
-    set parts [split $server ":"]
-    if {[llength $parts] == 2} {
-      puts "Attempting to connect to [lindex $parts 0]:[lindex $parts 1]"
-      sleep 1
-      send "connect [lindex $parts 0] [lindex $parts 1]\r"
-      send_user "Sent connect command: connect [lindex $parts 0] [lindex $parts 1]\n"
-      puts "Waiting for connection to establish..."
-      sleep 15
-      puts "Sending chat message..."
-      sleep 2
-      send "say Hello, world!\r"
-      send_user "Sent say command: say Hello, world!\n"
-    } else {
-      puts "Attempting to connect to $server:25565"
-      sleep 1
-      send "connect $server 25565\r"
-      send_user "Sent connect command: connect $server 25565\n"
-      puts "Waiting for connection to establish..."
-      sleep 15
-      puts "Sending chat message..."
-      sleep 2
-      send "say Hello, world!\r"
-      send_user "Sent say command: say Hello, world!\n"
-    }
+    set host $server
   }
+
+  puts "Attempting to connect to $host:$port"
+  sleep 1
+  send "connect $host $port\r"
+  send_user "Sent connect command: connect $host $port\n"
+
+  puts "Waiting for connection to establish..."
+  sleep 15
+
+  puts "Sending chat message..."
+  sleep 2
+  send "say Hello, world!\r"
+  send "gui"
+  send_user "Sent say command: say Hello, world!\n"
 } else {
   puts "No SERVER environment variable set, skipping connection"
 }
 
 
-expect eof
+# 5) Reconnection loop — if the server crashes, wait for it to come back and rejoin
+puts "Connected! Entering reconnection watch loop..."
+while {1} {
+  expect {
+    -re {Disconnected|Connection [Ll]ost|Connection [Rr]eset|io\.netty\.|Timed out|Internal Exception|Server closed} {
+      puts "=== DISCONNECTED from server ==="
+      puts "Waiting 15 seconds before checking server availability..."
+      sleep 15
+
+      set serverBack 0
+      while {!$serverBack} {
+        puts "Checking if mc-forge:25565 is reachable..."
+        if {[catch {exec sh -c {nc -z -w5 mc-forge 25565 2>/dev/null}} result]} {
+          puts "Server not yet available, retrying in 10 seconds..."
+          sleep 10
+        } else {
+          set serverBack 1
+        }
+      }
+
+      puts "Server is back! Waiting 20 seconds for it to fully start..."
+      sleep 20
+
+      puts "Attempting to reconnect to $host:$port ..."
+      send "connect $host $port\r"
+      puts "Reconnect command sent, waiting for connection..."
+      sleep 15
+      send "say I'm back!\r"
+      puts "Reconnection complete."
+    }
+    eof {
+      puts "HeadlessMC process exited. Shutting down."
+      exit 0
+    }
+  }
+}

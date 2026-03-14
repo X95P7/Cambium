@@ -1,1072 +1,531 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cambium Bot Training Dashboard</title>
+    <title>Cambium Training Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-            color: #333;
-        }
-
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-
-        .header {
-            background: rgba(255, 255, 255, 0.95);
-            padding: 20px 30px;
-            border-radius: 15px;
-            margin-bottom: 20px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .header h1 {
-            color: #667eea;
-            font-size: 2em;
-        }
-
-        .status-indicator {
-            display: flex;
-            gap: 15px;
-            align-items: center;
-        }
-
-        .status-badge {
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-weight: 600;
-            font-size: 0.9em;
-        }
-
-        .status-online {
-            background: #10b981;
-            color: white;
-        }
-
-        .status-offline {
-            background: #ef4444;
-            color: white;
-        }
-
-        .refresh-btn {
-            background: #667eea;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
-            transition: all 0.3s;
-        }
-
-        .refresh-btn:hover {
-            background: #5568d3;
-            transform: translateY(-2px);
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-
-        .card {
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 15px;
-            padding: 25px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-        }
-
-        .card h2 {
-            color: #667eea;
-            margin-bottom: 20px;
-            font-size: 1.5em;
-            border-bottom: 2px solid #e5e7eb;
-            padding-bottom: 10px;
-        }
-
-        .table-container {
-            overflow-x: auto;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-
-        th {
-            background: #667eea;
-            color: white;
-            padding: 12px;
-            text-align: left;
-            font-weight: 600;
-        }
-
-        td {
-            padding: 12px;
-            border-bottom: 1px solid #e5e7eb;
-        }
-
-        tr:hover {
-            background: #f3f4f6;
-        }
-
-        .status-ready {
-            color: #10b981;
-            font-weight: 600;
-        }
-
-        .status-fighting {
-            color: #f59e0b;
-            font-weight: 600;
-        }
-
-        .status-dead {
-            color: #ef4444;
-            font-weight: 600;
-        }
-
-        .arena-open {
-            color: #10b981;
-            font-weight: 600;
-        }
-
-        .arena-closed {
-            color: #ef4444;
-            font-weight: 600;
-        }
-
-        .chart-container {
-            position: relative;
-            height: 300px;
-            margin-top: 20px;
-        }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-
-        .stat-card {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            border-radius: 10px;
-            text-align: center;
-        }
-
-        .stat-value {
-            font-size: 2.5em;
-            font-weight: bold;
-            margin: 10px 0;
-        }
-
-        .stat-label {
-            font-size: 0.9em;
-            opacity: 0.9;
-        }
-
-        .config-section {
-            margin-top: 20px;
-        }
-
-        .config-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px solid #e5e7eb;
-        }
-
-        .config-label {
-            font-weight: 600;
-            color: #667eea;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 40px;
-            color: #667eea;
-            font-size: 1.2em;
-        }
-
-        .error {
-            background: #fee2e2;
-            color: #dc2626;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 10px 0;
-        }
-
-        .log-console {
-            background: #1e1e1e;
-            color: #d4d4d4;
-            padding: 15px;
-            border-radius: 8px;
-            max-height: 400px;
-            overflow-y: auto;
-            font-family: 'Courier New', monospace;
-            font-size: 0.85em;
-            line-height: 1.6;
-        }
-
-        .log-entry {
-            padding: 8px;
-            margin: 4px 0;
-            border-left: 3px solid #667eea;
-            background: rgba(102, 126, 234, 0.1);
-            border-radius: 4px;
-        }
-
-        .log-entry:hover {
-            background: rgba(102, 126, 234, 0.2);
-        }
-
-        .log-timestamp {
-            color: #10b981;
-            font-weight: 600;
-        }
-
-        .log-metric {
-            color: #f59e0b;
-        }
-
-        .log-value {
-            color: #60a5fa;
-        }
-
-        .log-bot {
-            color: #a78bfa;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-
-        .pulse {
-            animation: pulse 2s infinite;
-        }
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;padding:20px;color:#333}
+        .container{max-width:1500px;margin:0 auto}
+        .header{background:rgba(255,255,255,.95);padding:16px 24px;border-radius:12px;margin-bottom:16px;box-shadow:0 4px 24px rgba(0,0,0,.1);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+        .header h1{color:#667eea;font-size:1.6em}
+        .status-indicator{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+        .badge{padding:6px 14px;border-radius:20px;font-weight:600;font-size:.85em;color:#fff}
+        .badge-on{background:#10b981}.badge-off{background:#ef4444}
+        .btn{border:none;padding:8px 18px;border-radius:8px;cursor:pointer;font-weight:600;font-size:.85em;transition:all .2s}
+        .btn:hover{transform:translateY(-1px)}
+        .btn-primary{background:#667eea;color:#fff}.btn-primary:hover{background:#5568d3}
+        .btn-save{background:#10b981;color:#fff}.btn-save:hover{background:#059669}
+        .btn-danger{background:#ef4444;color:#fff}
+        .btn-sm{padding:4px 10px;font-size:.75em;border-radius:6px}
+        .btn:disabled{background:#9ca3af;cursor:not-allowed;transform:none}
+        .btn-group{display:inline-flex;gap:2px;background:#e5e7eb;border-radius:8px;padding:2px}
+        .btn-group .btn{border-radius:6px;padding:4px 12px;font-size:.75em;background:transparent;color:#667eea}
+        .btn-group .btn.active{background:#667eea;color:#fff}
+        .btn-group .btn:hover:not(.active){background:rgba(102,126,234,.15)}
+        .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;margin-bottom:16px}
+        .card{background:rgba(255,255,255,.95);border-radius:12px;padding:20px;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+        .card h2{color:#667eea;margin-bottom:14px;font-size:1.2em;border-bottom:2px solid #e5e7eb;padding-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+        .card h2 span{font-size:.65em;color:#9ca3af;font-weight:400}
+        .chart-box{position:relative;height:280px}
+        .view-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:8px 12px;background:#f3f4f6;border-radius:8px;flex-wrap:wrap;gap:6px}
+        .view-bar label{font-size:.8em;font-weight:600;color:#667eea}
+        .stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px}
+        .stat{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:14px;border-radius:10px;text-align:center}
+        .stat-val{font-size:2em;font-weight:bold;margin:4px 0}.stat-lbl{font-size:.8em;opacity:.9}
+        table{width:100%;border-collapse:collapse}
+        th{background:#667eea;color:#fff;padding:10px;text-align:left;font-weight:600;font-size:.85em}
+        td{padding:10px;border-bottom:1px solid #e5e7eb;font-size:.85em}
+        tr:hover{background:#f3f4f6}
+        .s-ready{color:#10b981;font-weight:600}.s-fighting{color:#f59e0b;font-weight:600}.s-dead{color:#ef4444;font-weight:600}
+        .log-box{background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:8px;max-height:350px;overflow-y:auto;font-family:'Courier New',monospace;font-size:.8em;line-height:1.6}
+        .log-e{padding:6px 8px;margin:3px 0;border-left:3px solid #667eea;background:rgba(102,126,234,.08);border-radius:3px}
+        .lt{color:#10b981;font-weight:600}.lm{color:#f59e0b}.lv{color:#60a5fa}.lb{color:#a78bfa}
+        .modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:1000;justify-content:center;align-items:center}
+        .modal-overlay.active{display:flex}
+        .modal{background:#fff;border-radius:12px;padding:24px;max-width:600px;width:90%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+        .modal h2{color:#667eea;margin-bottom:12px;border-bottom:2px solid #e5e7eb;padding-bottom:8px}
+        .modal-stats{font-family:'Courier New',monospace;background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:8px;font-size:.8em;line-height:1.8;margin:12px 0}
+        .modal-stats .label{color:#f59e0b}.modal-stats .value{color:#60a5fa}.modal-stats .section{color:#a78bfa;font-weight:bold;margin-top:8px;display:block}
+        .m-input{width:100%;padding:8px 12px;border:2px solid #e5e7eb;border-radius:8px;font-size:.95em;margin-bottom:12px;outline:none}
+        .m-input:focus{border-color:#667eea}
+        .m-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}.pulse{animation:pulse 2s infinite}
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🤖 Cambium Bot Training Dashboard</h1>
-            <div class="status-indicator">
-                <span class="status-badge" id="connectionStatus">Connecting...</span>
-                <button class="refresh-btn" onclick="refreshData()">🔄 Refresh</button>
-            </div>
+<div class="container">
+    <div class="header">
+        <h1>Cambium Training Dashboard</h1>
+        <div class="status-indicator">
+            <span class="badge" id="status">Connecting...</span>
+            <button class="btn" style="background:#8b5cf6;color:#fff" onclick="openModelModal()">Models</button>
+            <button class="btn btn-save" onclick="openSaveModal()">Save</button>
+            <button class="btn btn-primary" onclick="refreshData()">Refresh</button>
         </div>
+    </div>
 
-        <div class="stats-grid" id="statsGrid"></div>
-
-        <div class="grid">
-            <div class="card">
-                <h2>🤖 Bots Status</h2>
-                <div class="table-container">
-                    <table id="botsTable">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Status</th>
-                                <th>Pair</th>
-                                <th>Arena</th>
-                                <th>Model</th>
-                                <th>Tick Rate</th>
-                            </tr>
-                        </thead>
-                        <tbody id="botsTableBody">
-                            <tr><td colspan="6" class="loading">Loading...</tr>
-                        </tbody>
-                    </table>
+    <!-- Save Modal -->
+    <div class="modal-overlay" id="saveModal">
+        <div class="modal">
+            <h2 id="saveModalTitle">Save Model</h2>
+            <div id="saveModalBody">
+                <label style="font-weight:600;color:#667eea;display:block;margin-bottom:6px">Label (optional):</label>
+                <input class="m-input" id="saveLabel" type="text" placeholder="e.g. overnight_run_1">
+                <div class="m-actions">
+                    <button class="btn" style="background:#e5e7eb" onclick="closeSaveModal()">Cancel</button>
+                    <button class="btn btn-save" id="confirmSaveBtn" onclick="saveModel()">Save Now</button>
                 </div>
-            </div>
-
-            <div class="card">
-                <h2>⚔️ Arenas</h2>
-                <div class="table-container">
-                    <table id="arenasTable">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>Status</th>
-                                <th>Spawn Coords</th>
-                            </tr>
-                        </thead>
-                        <tbody id="arenasTableBody">
-                            <tr><td colspan="3" class="loading">Loading...</tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <div class="grid">
-            <div class="card">
-                <h2>📊 Training Metrics</h2>
-                <div class="chart-container">
-                    <canvas id="trainingChart"></canvas>
-                </div>
-            </div>
-
-            <div class="card">
-                <h2>⚡ Bot Performance</h2>
-                <div class="chart-container">
-                    <canvas id="performanceChart"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <div class="grid">
-            <div class="card">
-                <h2>📈 Reward Progression (per 100 ticks)</h2>
-                <div class="chart-container">
-                    <canvas id="rewardChart"></canvas>
-                </div>
-            </div>
-
-            <div class="card">
-                <h2>📉 Loss Progression</h2>
-                <div class="chart-container">
-                    <canvas id="lossChart"></canvas>
-                </div>
-            </div>
-        </div>
-
-            <div class="card">
-                <h2>📋 Training Logs (Every 100 Ticks)</h2>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
-                <button class="refresh-btn" onclick="clearLogs()" style="background: #ef4444;">Clear Logs</button>
-                <span style="color: #667eea; font-weight: 600;" id="logCount">0 logs</span>
-            </div>
-            <div class="log-console" id="logConsole">
-                <div class="log-entry">Waiting for training data...</div>
-            </div>
-        </div>
-
-        <div class="card">
-            <h2>👁️ Bot Observation Viewer</h2>
-            <div style="margin-bottom: 15px;">
-                <label for="botSelector" style="display: block; margin-bottom: 8px; font-weight: 600; color: #667eea;">Select Bot:</label>
-                <select id="botSelector" style="width: 100%; padding: 10px; border-radius: 8px; border: 2px solid #e5e7eb; font-size: 1em;" onchange="updateBotObservation()">
-                    <option value="">-- Select a bot --</option>
-                </select>
-            </div>
-            <div id="observationViewer" style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; max-height: 500px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 0.85em;">
-                <div style="text-align: center; padding: 20px; color: #667eea;">Select a bot to view its observation data</div>
-            </div>
-        </div>
-
-        <div class="grid">
-            <div class="card">
-                <h2>⚙️ Action Space Config</h2>
-                <div class="config-section" id="actionSpaceConfig"></div>
-            </div>
-
-            <div class="card">
-                <h2>👁️ Observation Space Config</h2>
-                <div class="config-section" id="observationSpaceConfig"></div>
             </div>
         </div>
     </div>
 
-    <script>
-        const API_BASE = window.location.origin;
-        let trainingChart = null;
-        let performanceChart = null;
-        let rewardChart = null;
-        let lossChart = null;
-        let trainingData = [];
-        let performanceData = {};
-        let rewardProgressionData = [];
-        let lossProgressionData = [];
+    <!-- Model Select Modal -->
+    <div class="modal-overlay" id="modelModal">
+        <div class="modal" style="max-width:700px">
+            <h2>Select Model</h2>
+            <p style="color:#6b7280;font-size:.85em;margin-bottom:12px">Choose a saved model to load, or start fresh with a new untrained model.</p>
+            <div style="margin-bottom:12px">
+                <button class="btn btn-danger btn-sm" onclick="resetModel()">New (Fresh) Model</button>
+            </div>
+            <div id="modelList" style="max-height:50vh;overflow-y:auto">
+                <div style="text-align:center;padding:20px;color:#667eea">Loading models...</div>
+            </div>
+            <div class="m-actions">
+                <button class="btn" style="background:#e5e7eb" onclick="closeModelModal()">Close</button>
+            </div>
+        </div>
+    </div>
 
-        // Initialize charts
-        function initCharts() {
-            const trainingCtx = document.getElementById('trainingChart').getContext('2d');
-            trainingChart = new Chart(trainingCtx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Total Samples',
-                        data: [],
-                        borderColor: 'rgb(102, 126, 234)',
-                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
-                        tension: 0.4,
-                        fill: true
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            display: true
-                        }
-                    },
-                    scales: {
-                        y: {
-                            beginAtZero: true
-                        }
-                    }
-                }
-            });
+    <div class="stats-row" id="statsRow"></div>
 
-            const performanceCtx = document.getElementById('performanceChart').getContext('2d');
-            performanceChart = new Chart(performanceCtx, {
-                type: 'bar',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Tick Rate (TPS)',
-                        data: [],
-                        backgroundColor: 'rgba(102, 126, 234, 0.8)',
-                        borderColor: 'rgb(102, 126, 234)',
-                        borderWidth: 1
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            display: true
-                        }
-                    },
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            max: 25
-                        }
-                    }
-                }
-            });
+    <!-- Chart window controls -->
+    <div class="view-bar">
+        <div>
+            <label>Window: </label>
+            <div class="btn-group" id="windowBtns">
+                <button class="btn" onclick="setWindow(50)">50</button>
+                <button class="btn active" onclick="setWindow(100)">100</button>
+                <button class="btn" onclick="setWindow(200)">200</button>
+                <button class="btn" onclick="setWindow(0)">All</button>
+            </div>
+        </div>
+        <div>
+            <label>Smoothing: </label>
+            <div class="btn-group" id="smoothBtns">
+                <button class="btn active" onclick="setSmooth(1)">Off</button>
+                <button class="btn" onclick="setSmooth(5)">5</button>
+                <button class="btn" onclick="setSmooth(10)">10</button>
+                <button class="btn" onclick="setSmooth(20)">20</button>
+            </div>
+        </div>
+        <span style="font-size:.8em;color:#667eea;font-weight:600" id="windowInfo">Showing last 100</span>
+    </div>
 
-            const rewardCtx = document.getElementById('rewardChart').getContext('2d');
-            rewardChart = new Chart(rewardCtx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Total Rewards',
-                        data: [],
-                        borderColor: 'rgb(16, 185, 129)',
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                        tension: 0.4,
-                        fill: true,
-                        yAxisID: 'y'
-                    }, {
-                        label: 'Avg Reward per Sample',
-                        data: [],
-                        borderColor: 'rgb(245, 158, 11)',
-                        backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                        tension: 0.4,
-                        fill: false,
-                        yAxisID: 'y1'
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            display: true
-                        }
-                    },
-                    scales: {
-                        y: {
-                            type: 'linear',
-                            display: true,
-                            position: 'left',
-                            beginAtZero: true
-                        },
-                        y1: {
-                            type: 'linear',
-                            display: true,
-                            position: 'right',
-                            beginAtZero: true,
-                            grid: {
-                                drawOnChartArea: false
-                            }
-                        }
-                    }
-                }
-            });
+    <!-- Bots & Arenas -->
+    <div class="grid">
+        <div class="card"><h2>Bots</h2><table><thead><tr><th>Name</th><th>Status</th><th>Pair</th><th>Arena</th><th>Model</th><th>TPS</th></tr></thead><tbody id="botsTbody"><tr><td colspan="6" style="text-align:center;padding:20px;color:#667eea">Loading...</td></tr></tbody></table></div>
+        <div class="card"><h2>Arenas</h2><table><thead><tr><th>Name</th><th>Status</th><th>Spawns</th></tr></thead><tbody id="arenasTbody"><tr><td colspan="3" style="text-align:center;padding:20px;color:#667eea">Loading...</td></tr></tbody></table></div>
+    </div>
 
-            const lossCtx = document.getElementById('lossChart').getContext('2d');
-            lossChart = new Chart(lossCtx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Training Loss',
-                        data: [],
-                        borderColor: 'rgb(239, 68, 68)',
-                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                        tension: 0.4,
-                        fill: true
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            display: true
-                        }
-                    },
-                    scales: {
-                        y: {
-                            beginAtZero: true
-                        }
-                    }
-                }
-            });
+    <!-- Main training charts -->
+    <div class="grid">
+        <div class="card"><h2>Avg Reward / Step <span id="avgRewardInfo"></span></h2><div class="chart-box"><canvas id="avgRewardChart"></canvas></div></div>
+        <div class="card"><h2>Total Reward / Interval <span id="totalRewardInfo"></span></h2><div class="chart-box"><canvas id="totalRewardChart"></canvas></div></div>
+    </div>
+    <div class="grid">
+        <div class="card"><h2>Loss (Policy + Value) <span id="lossInfo"></span></h2><div class="chart-box"><canvas id="lossChart"></canvas></div></div>
+        <div class="card"><h2>Entropy <span id="entropyInfo"></span></h2><div class="chart-box"><canvas id="entropyChart"></canvas></div></div>
+    </div>
+    <div class="grid">
+        <div class="card"><h2>Reward Breakdown by Type</h2><div class="chart-box"><canvas id="rewardTypesChart"></canvas></div></div>
+        <div class="card"><h2>Tick Rate (TPS)</h2><div class="chart-box"><canvas id="tpsChart"></canvas></div></div>
+    </div>
+
+    <!-- Logs -->
+    <div class="card" style="margin-bottom:16px">
+        <h2>Training Log</h2>
+        <div style="display:flex;justify-content:space-between;margin-bottom:10px">
+            <button class="btn btn-danger btn-sm" onclick="document.getElementById('logBox').innerHTML=''">Clear</button>
+            <span style="color:#667eea;font-weight:600;font-size:.85em" id="logCount">0 intervals</span>
+        </div>
+        <div class="log-box" id="logBox"><div class="log-e">Waiting for training data...</div></div>
+    </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let charts = {};
+let windowSize = 100;
+let smoothK = 1;
+let rawProgression = [];
+let rawLogs = [];
+
+const COLORS = {
+    blue:'rgb(102,126,234)', green:'rgb(16,185,129)', orange:'rgb(245,158,11)',
+    red:'rgb(239,68,68)', purple:'rgb(167,139,250)', cyan:'rgb(6,182,212)',
+    pink:'rgb(236,72,153)', lime:'rgb(132,204,22)', amber:'rgb(217,119,6)'
+};
+const REWARD_COLORS = {
+    won_duel:'#10b981', death:'#ef4444', damage_dealt:'#f59e0b', damage_taken:'#dc2626',
+    good_aim:'#8b5cf6', aim_hold:'#a78bfa', proximity:'#06b6d4', pitch_control:'#60a5fa',
+    extreme_pitch_penalty:'#f43f5e', episode_timeout:'#6b7280'
+};
+
+function setWindow(n) {
+    windowSize = n;
+    document.querySelectorAll('#windowBtns .btn').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+    redrawCharts();
+}
+
+function setSmooth(k) {
+    smoothK = k;
+    document.querySelectorAll('#smoothBtns .btn').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+    redrawCharts();
+}
+
+function ema(arr, k) {
+    if (k <= 1 || arr.length === 0) return arr;
+    const alpha = 2 / (k + 1);
+    const out = [arr[0]];
+    for (let i = 1; i < arr.length; i++) {
+        out.push(alpha * arr[i] + (1 - alpha) * out[i - 1]);
+    }
+    return out;
+}
+
+function windowSlice(arr) {
+    if (windowSize === 0 || arr.length <= windowSize) return arr;
+    return arr.slice(-windowSize);
+}
+
+function makeChart(id, type, datasets, opts = {}) {
+    const ctx = document.getElementById(id).getContext('2d');
+    return new Chart(ctx, {
+        type,
+        data: { labels: [], datasets },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            animation: false,
+            plugins: {
+                legend: { display: opts.legend !== false, labels: { boxWidth: 12, font: { size: 11 } } },
+                decimation: { enabled: true, algorithm: 'lttb', samples: 80 }
+            },
+            scales: {
+                x: { ticks: { maxTicksLimit: 12, font: { size: 10 }, autoSkip: true, maxRotation: 0 } },
+                y: { beginAtZero: opts.beginAtZero !== false, ...(opts.yOpts || {}) },
+                ...(opts.extraScales || {})
+            },
+            elements: { point: { radius: 0, hitRadius: 6, hoverRadius: 4 } },
+            interaction: { mode: 'index', intersect: false },
+            ...(opts.extra || {})
         }
+    });
+}
 
-        async function fetchGameState() {
-            try {
-                const response = await fetch(`${API_BASE}/game-state`);
-                if (!response.ok) throw new Error('Failed to fetch game state');
-                return await response.json();
-            } catch (error) {
-                console.error('Error fetching game state:', error);
-                throw error;
-            }
-        }
+function initCharts() {
+    charts.avgReward = makeChart('avgRewardChart', 'line', [
+        { label: 'Avg Reward/Step', data: [], borderColor: COLORS.green, backgroundColor: 'rgba(16,185,129,.1)', tension: .3, fill: true, borderWidth: 2 }
+    ]);
+    charts.totalReward = makeChart('totalRewardChart', 'line', [
+        { label: 'Total Reward', data: [], borderColor: COLORS.blue, backgroundColor: 'rgba(102,126,234,.1)', tension: .3, fill: true, borderWidth: 2 }
+    ]);
+    charts.loss = makeChart('lossChart', 'line', [
+        { label: 'Policy', data: [], borderColor: COLORS.red, tension: .3, borderWidth: 2 },
+        { label: 'Value', data: [], borderColor: COLORS.orange, tension: .3, borderWidth: 2 },
+        { label: 'Total', data: [], borderColor: COLORS.purple, tension: .3, borderWidth: 2, borderDash: [4, 2] }
+    ]);
+    charts.entropy = makeChart('entropyChart', 'line', [
+        { label: 'Entropy', data: [], borderColor: COLORS.cyan, backgroundColor: 'rgba(6,182,212,.1)', tension: .3, fill: true, borderWidth: 2 }
+    ]);
+    charts.rewardTypes = makeChart('rewardTypesChart', 'bar', [], { extra: { scales: { x: { stacked: true }, y: { stacked: true } } } });
+    charts.tps = makeChart('tpsChart', 'bar', [
+        { label: 'TPS', data: [], backgroundColor: 'rgba(102,126,234,.7)', borderColor: COLORS.blue, borderWidth: 1 }
+    ], { yOpts: { max: 25 } });
+}
 
-        async function fetchStats() {
-            try {
-                const response = await fetch(`${API_BASE}/stats`);
-                if (!response.ok) throw new Error('Failed to fetch stats');
-                return await response.json();
-            } catch (error) {
-                console.error('Error fetching stats:', error);
-                throw error;
-            }
-        }
+function redrawCharts() {
+    updateCharts(rawProgression);
+    updateLossDetailed(rawLogs);
+    const total = rawProgression.length;
+    const shown = windowSize === 0 ? total : Math.min(windowSize, total);
+    const smoothLabel = smoothK > 1 ? `, EMA(${smoothK})` : '';
+    document.getElementById('windowInfo').textContent = windowSize === 0
+        ? `Showing all ${total}${smoothLabel}`
+        : `Showing last ${shown} of ${total}${smoothLabel}`;
+}
 
-        async function fetchTrainingLogs() {
-            try {
-                const response = await fetch(`${API_BASE}/training-logs`);
-                if (!response.ok) throw new Error('Failed to fetch training logs');
-                return await response.json();
-            } catch (error) {
-                console.error('Error fetching training logs:', error);
-                throw error;
-            }
-        }
+function updateCharts(prog) {
+    if (!prog || !prog.length) return;
+    const w = windowSlice(prog);
+    const labels = w.map(p => p.interval);
+    const smoothStr = smoothK > 1 ? `EMA(${smoothK})` : '';
 
-        async function fetchRewardProgression() {
-            try {
-                const response = await fetch(`${API_BASE}/reward-progression`);
-                if (!response.ok) throw new Error('Failed to fetch reward progression');
-                return await response.json();
-            } catch (error) {
-                console.error('Error fetching reward progression:', error);
-                throw error;
-            }
-        }
+    charts.avgReward.data.labels = labels;
+    charts.avgReward.data.datasets[0].data = ema(w.map(p => p.avg_reward), smoothK);
+    charts.avgReward.update('none');
+    document.getElementById('avgRewardInfo').textContent = smoothStr;
 
-        async function fetchBotObservation(botName) {
-            try {
-                const response = await fetch(`${API_BASE}/bot-observation/${botName}`);
-                if (!response.ok) throw new Error('Failed to fetch bot observation');
-                return await response.json();
-            } catch (error) {
-                console.error('Error fetching bot observation:', error);
-                throw error;
-            }
-        }
+    charts.totalReward.data.labels = labels;
+    charts.totalReward.data.datasets[0].data = ema(w.map(p => p.total_rewards), smoothK);
+    charts.totalReward.update('none');
+    document.getElementById('totalRewardInfo').textContent = smoothStr;
 
-        function formatObservation(obs) {
-            if (!obs) return '<div style="color: #ef4444;">No observation data</div>';
-            
-            let html = '<div style="line-height: 1.8;">';
-            
-            // Player data
-            if (obs.player) {
-                html += '<div style="margin-bottom: 15px;"><strong style="color: #10b981;">Player Data:</strong><br>';
-                html += `  Health: <span style="color: #60a5fa;">${obs.player.health || 0}</span><br>`;
-                html += `  Position: <span style="color: #60a5fa;">(${obs.player.x?.toFixed(2) || 0}, ${obs.player.y?.toFixed(2) || 0}, ${obs.player.z?.toFixed(2) || 0})</span><br>`;
-                html += `  Rotation: <span style="color: #60a5fa;">Yaw: ${obs.player.yaw?.toFixed(2) || 0}°, Pitch: ${obs.player.pitch?.toFixed(2) || 0}°</span><br>`;
-                html += `  Armor: <span style="color: #60a5fa;">${obs.player.armor || 0}</span><br>`;
-                html += '</div>';
-            }
-            
-            // Entities
-            if (obs.entities && obs.entities.length > 0) {
-                html += `<div style="margin-bottom: 15px;"><strong style="color: #10b981;">Entities (${obs.entities.length}):</strong><br>`;
-                obs.entities.slice(0, 5).forEach((entity, idx) => {
-                    html += `  <span style="color: #a78bfa;">Entity ${idx + 1}:</span> `;
-                    html += `Type: <span style="color: #60a5fa;">${entity.isPlayer ? 'Player' : entity.isProjectile ? 'Projectile' : 'Other'}</span>, `;
-                    html += `Health: <span style="color: #60a5fa;">${entity.health || 0}</span>, `;
-                    html += `Pos: <span style="color: #60a5fa;">(${entity.relativeX?.toFixed(2) || 0}, ${entity.relativeY?.toFixed(2) || 0}, ${entity.relativeZ?.toFixed(2) || 0})</span><br>`;
-                });
-                if (obs.entities.length > 5) {
-                    html += `  <span style="color: #f59e0b;">... and ${obs.entities.length - 5} more</span><br>`;
-                }
-                html += '</div>';
-            }
-            
-            // Blocks
-            if (obs.blocks && obs.blocks.length > 0) {
-                html += `<div style="margin-bottom: 15px;"><strong style="color: #10b981;">Blocks (${obs.blocks.length}):</strong><br>`;
-                obs.blocks.slice(0, 5).forEach((block, idx) => {
-                    html += `  <span style="color: #a78bfa;">Block ${idx + 1}:</span> `;
-                    html += `Pos: <span style="color: #60a5fa;">(${block.x || 0}, ${block.y || 0}, ${block.z || 0})</span>, `;
-                    html += `Dist: <span style="color: #60a5fa;">${block.distance?.toFixed(2) || 0}</span>, `;
-                    html += `Solid: <span style="color: #60a5fa;">${block.solid ? 'Yes' : 'No'}</span><br>`;
-                });
-                if (obs.blocks.length > 5) {
-                    html += `  <span style="color: #f59e0b;">... and ${obs.blocks.length - 5} more</span><br>`;
-                }
-                html += '</div>';
-            }
-            
-            // Inventory
-            if (obs.inventory && obs.inventory.length > 0) {
-                html += `<div style="margin-bottom: 15px;"><strong style="color: #10b981;">Inventory (${obs.inventory.length} slots):</strong><br>`;
-                obs.inventory.forEach((inv, idx) => {
-                    if (inv.count > 0) {
-                        html += `  Slot ${idx}: <span style="color: #60a5fa;">Count: ${inv.count}</span>`;
-                        if (inv.isWeapon) {
-                            html += `, <span style="color: #ef4444;">Weapon</span> (Damage: ${inv.weaponDamage || 0})`;
-                        }
-                        html += '<br>';
-                    }
-                });
-                html += '</div>';
-            }
-            
-            html += '</div>';
-            return html;
-        }
+    const allTypes = new Set();
+    w.forEach(p => { if (p.reward_types) Object.keys(p.reward_types).forEach(k => allTypes.add(k)); });
+    const typeArr = [...allTypes].sort();
+    charts.rewardTypes.data.labels = labels;
+    charts.rewardTypes.data.datasets = typeArr.map(t => ({
+        label: t,
+        data: w.map(p => {
+            const rt = p.reward_types?.[t];
+            return rt ? (typeof rt === 'object' ? rt.amount : rt) : 0;
+        }),
+        backgroundColor: REWARD_COLORS[t] || `hsl(${typeArr.indexOf(t) * 37}, 60%, 55%)`,
+    }));
+    charts.rewardTypes.update('none');
+}
 
-        async function updateBotObservation() {
-            const selector = document.getElementById('botSelector');
-            const viewer = document.getElementById('observationViewer');
-            const botName = selector.value;
-            
-            if (!botName) {
-                viewer.innerHTML = '<div style="text-align: center; padding: 20px; color: #667eea;">Select a bot to view its observation data</div>';
-                return;
-            }
-            
-            try {
-                const data = await fetchBotObservation(botName);
-                if (data.status === 'success') {
-                    viewer.innerHTML = `
-                        <div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 2px solid #667eea;">
-                            <strong style="color: #667eea;">Bot: ${data.bot_name}</strong><br>
-                            <span style="color: #f59e0b;">Tick Count: ${data.tick_count}</span><br>
-                            <span style="color: #10b981;">Last Updated: ${new Date(data.timestamp).toLocaleString()}</span>
-                        </div>
-                        ${formatObservation(data.observation)}
-                    `;
-                } else {
-                    viewer.innerHTML = `<div style="color: #ef4444;">${data.message || 'Error loading observation'}</div>`;
-                }
-            } catch (error) {
-                viewer.innerHTML = `<div style="color: #ef4444;">Error: ${error.message}</div>`;
-            }
-        }
+function updateLossDetailed(logs) {
+    if (!logs || !logs.length) return;
+    const w = windowSlice(logs);
+    const startIdx = logs.length - w.length + 1;
+    const labels = w.map((_, i) => startIdx + i);
+    const pLoss = [], vLoss = [], tLoss = [], entropy = [];
+    w.forEach(log => {
+        const s = log.training_stats || {};
+        pLoss.push(s.policy_loss || 0);
+        vLoss.push(s.value_loss || 0);
+        tLoss.push(s.loss || 0);
+        entropy.push(s.entropy || 0);
+    });
+    const smoothStr = smoothK > 1 ? `EMA(${smoothK})` : '';
 
-        function updateBotSelector(bots) {
-            const selector = document.getElementById('botSelector');
-            const currentValue = selector.value;
-            
-            // Clear and repopulate
-            selector.innerHTML = '<option value="">-- Select a bot --</option>';
-            
-            bots.forEach(bot => {
-                const option = document.createElement('option');
-                option.value = bot.name;
-                option.textContent = `${bot.name} (${bot.status})`;
-                selector.appendChild(option);
-            });
-            
-            // Restore selection if still valid
-            if (currentValue && bots.some(b => b.name === currentValue)) {
-                selector.value = currentValue;
-            }
-        }
+    charts.loss.data.labels = labels;
+    charts.loss.data.datasets[0].data = ema(pLoss, smoothK);
+    charts.loss.data.datasets[1].data = ema(vLoss, smoothK);
+    charts.loss.data.datasets[2].data = ema(tLoss, smoothK);
+    charts.loss.update('none');
+    document.getElementById('lossInfo').textContent = smoothStr;
 
-        async function fetchBotObservation(botName) {
-            try {
-                const response = await fetch(`${API_BASE}/bot-observation/${botName}`);
-                if (!response.ok) throw new Error('Failed to fetch bot observation');
-                return await response.json();
-            } catch (error) {
-                console.error('Error fetching bot observation:', error);
-                throw error;
-            }
-        }
+    charts.entropy.data.labels = labels;
+    charts.entropy.data.datasets[0].data = ema(entropy, smoothK);
+    charts.entropy.update('none');
+    document.getElementById('entropyInfo').textContent = smoothStr;
+}
 
-        function formatObservation(obs) {
-            if (!obs) return '<div style="color: #ef4444;">No observation data</div>';
-            
-            let html = '<div style="line-height: 1.8;">';
-            
-            // Player data
-            if (obs.player) {
-                html += '<div style="margin-bottom: 15px;"><strong style="color: #10b981;">Player Data:</strong><br>';
-                html += `  Health: <span style="color: #60a5fa;">${obs.player.health || 0}</span><br>`;
-                html += `  Position: <span style="color: #60a5fa;">(${obs.player.x?.toFixed(2) || 0}, ${obs.player.y?.toFixed(2) || 0}, ${obs.player.z?.toFixed(2) || 0})</span><br>`;
-                html += `  Rotation: <span style="color: #60a5fa;">Yaw: ${obs.player.yaw?.toFixed(2) || 0}°, Pitch: ${obs.player.pitch?.toFixed(2) || 0}°</span><br>`;
-                html += `  Armor: <span style="color: #60a5fa;">${obs.player.armor || 0}</span><br>`;
-                html += '</div>';
-            }
-            
-            // Entities
-            if (obs.entities && obs.entities.length > 0) {
-                html += `<div style="margin-bottom: 15px;"><strong style="color: #10b981;">Entities (${obs.entities.length}):</strong><br>`;
-                obs.entities.slice(0, 5).forEach((entity, idx) => {
-                    html += `  <span style="color: #a78bfa;">Entity ${idx + 1}:</span> `;
-                    html += `Type: <span style="color: #60a5fa;">${entity.isPlayer ? 'Player' : entity.isProjectile ? 'Projectile' : 'Other'}</span>, `;
-                    html += `Health: <span style="color: #60a5fa;">${entity.health || 0}</span>, `;
-                    html += `Pos: <span style="color: #60a5fa;">(${entity.relativeX?.toFixed(2) || 0}, ${entity.relativeY?.toFixed(2) || 0}, ${entity.relativeZ?.toFixed(2) || 0})</span><br>`;
-                });
-                if (obs.entities.length > 5) {
-                    html += `  <span style="color: #f59e0b;">... and ${obs.entities.length - 5} more</span><br>`;
-                }
-                html += '</div>';
-            }
-            
-            // Blocks
-            if (obs.blocks && obs.blocks.length > 0) {
-                html += `<div style="margin-bottom: 15px;"><strong style="color: #10b981;">Blocks (${obs.blocks.length}):</strong><br>`;
-                obs.blocks.slice(0, 5).forEach((block, idx) => {
-                    html += `  <span style="color: #a78bfa;">Block ${idx + 1}:</span> `;
-                    html += `Pos: <span style="color: #60a5fa;">(${block.x || 0}, ${block.y || 0}, ${block.z || 0})</span>, `;
-                    html += `Dist: <span style="color: #60a5fa;">${block.distance?.toFixed(2) || 0}</span>, `;
-                    html += `Solid: <span style="color: #60a5fa;">${block.solid ? 'Yes' : 'No'}</span><br>`;
-                });
-                if (obs.blocks.length > 5) {
-                    html += `  <span style="color: #f59e0b;">... and ${obs.blocks.length - 5} more</span><br>`;
-                }
-                html += '</div>';
-            }
-            
-            // Inventory
-            if (obs.inventory && obs.inventory.length > 0) {
-                html += `<div style="margin-bottom: 15px;"><strong style="color: #10b981;">Inventory (${obs.inventory.length} slots):</strong><br>`;
-                obs.inventory.forEach((inv, idx) => {
-                    if (inv.count > 0) {
-                        html += `  Slot ${idx}: <span style="color: #60a5fa;">Count: ${inv.count}</span>`;
-                        if (inv.isWeapon) {
-                            html += `, <span style="color: #ef4444;">Weapon</span> (Damage: ${inv.weaponDamage || 0})`;
-                        }
-                        html += '<br>';
-                    }
-                });
-                html += '</div>';
-            }
-            
-            html += '</div>';
-            return html;
-        }
+function updateStats(stats) {
+    document.getElementById('statsRow').innerHTML = [
+        ['Bots', stats.total_bots || 0],
+        ['Fighting', stats.active_bots || 0],
+        ['Open Arenas', stats.open_arenas || 0],
+        ['Buffer', stats.rl_samples || 0],
+        ['Last Loss', (stats.last_loss || 0).toFixed(4)],
+        ['Last Score', (stats.last_score || 0).toFixed(1)]
+    ].map(([l, v]) => `<div class="stat"><div class="stat-lbl">${l}</div><div class="stat-val">${v}</div></div>`).join('');
+}
 
-        async function updateBotObservation() {
-            const selector = document.getElementById('botSelector');
-            const viewer = document.getElementById('observationViewer');
-            const botName = selector.value;
-            
-            if (!botName) {
-                viewer.innerHTML = '<div style="text-align: center; padding: 20px; color: #667eea;">Select a bot to view its observation data</div>';
-                return;
-            }
-            
-            try {
-                const data = await fetchBotObservation(botName);
-                if (data.status === 'success') {
-                    viewer.innerHTML = `
-                        <div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 2px solid #667eea;">
-                            <strong style="color: #667eea;">Bot: ${data.bot_name}</strong><br>
-                            <span style="color: #f59e0b;">Tick Count: ${data.tick_count}</span><br>
-                            <span style="color: #10b981;">Last Updated: ${new Date(data.timestamp).toLocaleString()}</span>
-                        </div>
-                        ${formatObservation(data.observation)}
-                    `;
-                } else {
-                    viewer.innerHTML = `<div style="color: #ef4444;">${data.message || 'Error loading observation'}</div>`;
-                }
-            } catch (error) {
-                viewer.innerHTML = `<div style="color: #ef4444;">Error: ${error.message}</div>`;
-            }
-        }
+function updateBots(bots) {
+    const tb = document.getElementById('botsTbody');
+    if (!bots.length) { tb.innerHTML = '<tr><td colspan="6" style="text-align:center">No bots</td></tr>'; return; }
+    tb.innerHTML = bots.map(b => `<tr><td><strong>${b.name}</strong></td><td><span class="s-${b.status}">${b.status.toUpperCase()}</span></td><td>${b.pair||'—'}</td><td>${b.arena||'—'}</td><td>v${b.model_version}</td><td>${b.tick_rate.toFixed(1)}</td></tr>`).join('');
+    charts.tps.data.labels = bots.map(b => b.name);
+    charts.tps.data.datasets[0].data = bots.map(b => b.tick_rate);
+    charts.tps.update('none');
+}
 
-        function updateBotSelector(bots) {
-            const selector = document.getElementById('botSelector');
-            const currentValue = selector.value;
-            
-            // Clear and repopulate
-            selector.innerHTML = '<option value="">-- Select a bot --</option>';
-            
-            bots.forEach(bot => {
-                const option = document.createElement('option');
-                option.value = bot.name;
-                option.textContent = `${bot.name} (${bot.status})`;
-                selector.appendChild(option);
-            });
-            
-            // Restore selection if still valid
-            if (currentValue && bots.some(b => b.name === currentValue)) {
-                selector.value = currentValue;
-            }
-        }
+function updateArenas(arenas) {
+    const tb = document.getElementById('arenasTbody');
+    if (!arenas.length) { tb.innerHTML = '<tr><td colspan="3" style="text-align:center">No arenas</td></tr>'; return; }
+    tb.innerHTML = arenas.map(a => `<tr><td><strong>${a.name}</strong></td><td style="color:${a.status==='open'?'#10b981':'#ef4444'};font-weight:600">${a.status.toUpperCase()}</td><td style="font-size:.8em">${a.spawn_coords.map(c=>'['+c.join(', ')+']').join(', ')}</td></tr>`).join('');
+}
 
-        function updateStatsGrid(stats) {
-            const statsGrid = document.getElementById('statsGrid');
-            statsGrid.innerHTML = `
-                <div class="stat-card">
-                    <div class="stat-label">Total Bots</div>
-                    <div class="stat-value">${stats.total_bots || 0}</div>
+function updateLog(logs) {
+    const box = document.getElementById('logBox');
+    const cnt = document.getElementById('logCount');
+    if (!logs || !logs.length) { box.innerHTML = '<div class="log-e">Waiting for data...</div>'; cnt.textContent = '0 intervals'; return; }
+    cnt.textContent = `${logs.length} intervals`;
+    const recent = logs.slice(-25).reverse();
+    const total = logs.length;
+    box.innerHTML = recent.map((log, i) => {
+        const t = new Date(log.timestamp).toLocaleTimeString();
+        const s = log.training_stats || {};
+        const n = total - i;
+        const bots = Object.entries(log.bot_statistics || {}).map(([k,v]) => `<span class="lb">${k}</span>: <span class="lv">${v.score.toFixed(1)}</span>`).join(' | ');
+        const rt = s.reward_types ? Object.entries(s.reward_types).map(([k,v]) => {
+            const amt = typeof v === 'object' ? v.amount : v;
+            return `${k}=${amt >= 0 ? '+' : ''}${amt.toFixed(2)}`;
+        }).join(', ') : '';
+        return `<div class="log-e">
+            <span class="lt">[${t}]</span> <span class="lm">#${n}</span> &nbsp;
+            <span class="lm">samples:</span><span class="lv">${s.samples_trained||0}</span> &nbsp;
+            <span class="lm">loss:</span><span class="lv">${(s.loss||0).toFixed(4)}</span> &nbsp;
+            <span class="lm">reward:</span><span class="lv">${(s.total_rewards||0).toFixed(2)}</span> &nbsp;
+            <span class="lm">avg:</span><span class="lv">${(s.avg_reward_per_sample||0).toFixed(4)}</span>
+            ${bots ? '<br>' + bots : ''}
+            ${rt ? '<br><span style="font-size:.9em;color:#9ca3af">' + rt + '</span>' : ''}
+        </div>`;
+    }).join('');
+}
+
+async function refreshData() {
+    const badge = document.getElementById('status');
+    badge.textContent = 'Refreshing...'; badge.className = 'badge badge-on pulse';
+    try {
+        const [gs, stats, logs, prog] = await Promise.all([
+            fetch(`${API}/game-state`).then(r => r.json()),
+            fetch(`${API}/stats`).then(r => r.json()),
+            fetch(`${API}/training-logs`).then(r => r.json()),
+            fetch(`${API}/reward-progression`).then(r => r.json())
+        ]);
+        rawProgression = prog.progression || [];
+        rawLogs = logs.logs || [];
+        updateStats(stats);
+        updateBots(gs.bots);
+        updateArenas(gs.arenas);
+        updateCharts(rawProgression);
+        updateLossDetailed(rawLogs);
+        updateLog(rawLogs);
+
+        const total = rawProgression.length;
+        const shown = windowSize === 0 ? total : Math.min(windowSize, total);
+        const smoothLabel = smoothK > 1 ? `, EMA(${smoothK})` : '';
+        document.getElementById('windowInfo').textContent = windowSize === 0
+            ? `Showing all ${total}${smoothLabel}`
+            : `Showing last ${shown} of ${total}${smoothLabel}`;
+
+        badge.textContent = 'Connected'; badge.className = 'badge badge-on';
+    } catch (e) {
+        badge.textContent = 'Disconnected'; badge.className = 'badge badge-off';
+        console.error(e);
+    }
+}
+
+function openSaveModal() {
+    document.getElementById('saveModal').classList.add('active');
+    document.getElementById('saveModalTitle').textContent = 'Save Model';
+    document.getElementById('saveModalBody').innerHTML = `
+        <label style="font-weight:600;color:#667eea;display:block;margin-bottom:6px">Label (optional):</label>
+        <input class="m-input" id="saveLabel" type="text" placeholder="e.g. overnight_run_1">
+        <div class="m-actions"><button class="btn" style="background:#e5e7eb" onclick="closeSaveModal()">Cancel</button><button class="btn btn-save" id="confirmSaveBtn" onclick="saveModel()">Save Now</button></div>`;
+    setTimeout(() => document.getElementById('saveLabel')?.focus(), 100);
+}
+function closeSaveModal() { document.getElementById('saveModal').classList.remove('active'); }
+
+async function saveModel() {
+    const label = document.getElementById('saveLabel')?.value?.trim() || '';
+    const btn = document.getElementById('confirmSaveBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+    try {
+        const resp = await fetch(`${API}/save-model`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({label}) });
+        const r = await resp.json();
+        if (r.status === 'success') {
+            const s = r.summary;
+            const rwd = Object.entries(s.lifetime_reward_breakdown||{}).sort((a,b)=>b[1].amount-a[1].amount)
+                .map(([k,v])=>`<span style="color:#f59e0b">${k.padEnd(22)}</span> n=<span style="color:#60a5fa">${v.count}</span> total=<span style="color:#60a5fa">${v.amount>=0?'+':''}${v.amount.toFixed(2)}</span>`).join('<br>');
+            const bots = Object.entries(s.bot_scores||{}).map(([k,v])=>`<span style="color:#f59e0b">${k}:</span> <span style="color:#60a5fa">${v.toFixed(2)}</span>`).join('<br>');
+            document.getElementById('saveModalTitle').textContent = 'Model Saved';
+            document.getElementById('saveModalBody').innerHTML = `
+                <div style="margin-bottom:8px"><strong style="color:#10b981">Path:</strong> ${r.path}<br><strong style="color:#10b981">Stats:</strong> ${r.stats_path}</div>
+                <div class="modal-stats">
+                    <span class="section">Summary</span>
+                    <span class="label">Intervals:</span> <span class="value">${s.training_intervals}</span><br>
+                    <span class="label">Samples:</span> <span class="value">${s.total_samples_trained.toLocaleString()}</span><br>
+                    <span class="label">Total reward:</span> <span class="value">${s.total_reward_accumulated>=0?'+':''}${s.total_reward_accumulated.toFixed(2)}</span><br>
+                    <span class="label">Avg/sample:</span> <span class="value">${s.avg_reward_per_sample>=0?'+':''}${s.avg_reward_per_sample.toFixed(6)}</span><br>
+                    <span class="section">Reward Breakdown</span>${rwd||'<span style="color:#9ca3af">none</span>'}
+                    <span class="section">Bot Scores</span>${bots||'<span style="color:#9ca3af">none</span>'}
                 </div>
-                <div class="stat-card">
-                    <div class="stat-label">Active Duels</div>
-                    <div class="stat-value">${stats.active_bots || 0}</div>
+                <div class="m-actions"><button class="btn" style="background:#e5e7eb" onclick="closeSaveModal()">Close</button></div>`;
+        } else {
+            document.getElementById('saveModalTitle').textContent = 'Save Failed';
+            document.getElementById('saveModalBody').innerHTML = `<div style="background:#fee2e2;color:#dc2626;padding:12px;border-radius:8px">${r.message}</div><div class="m-actions"><button class="btn" style="background:#e5e7eb" onclick="closeSaveModal()">Close</button></div>`;
+        }
+    } catch(e) {
+        document.getElementById('saveModalTitle').textContent = 'Save Failed';
+        document.getElementById('saveModalBody').innerHTML = `<div style="background:#fee2e2;color:#dc2626;padding:12px;border-radius:8px">${e.message}</div><div class="m-actions"><button class="btn" style="background:#e5e7eb" onclick="closeSaveModal()">Close</button></div>`;
+    }
+}
+
+function openModelModal() {
+    document.getElementById('modelModal').classList.add('active');
+    loadModelList();
+}
+function closeModelModal() { document.getElementById('modelModal').classList.remove('active'); }
+
+async function loadModelList() {
+    const container = document.getElementById('modelList');
+    try {
+        const resp = await fetch(`${API}/list-models`);
+        const data = await resp.json();
+        const models = data.models || [];
+        if (!models.length) {
+            container.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af">No saved models found.</div>';
+            return;
+        }
+        container.innerHTML = models.map(m => {
+            const date = new Date(m.modified).toLocaleString();
+            const isAutosave = m.filename.startsWith('autosave_');
+            const tag = isAutosave ? '<span style="background:#f59e0b;color:#fff;padding:1px 6px;border-radius:4px;font-size:.7em;margin-left:4px">AUTO</span>'
+                : m.filename.includes('shutdown') ? '<span style="background:#ef4444;color:#fff;padding:1px 6px;border-radius:4px;font-size:.7em;margin-left:4px">SHUTDOWN</span>'
+                : '';
+            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px;cursor:pointer;transition:background .15s" onmouseenter="this.style.background='#f3f4f6'" onmouseleave="this.style.background=''" >
+                <div style="flex:1;min-width:0">
+                    <div style="font-weight:600;font-size:.9em;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${m.filename}${tag}</div>
+                    <div style="font-size:.75em;color:#9ca3af">${date} &middot; ${m.size_kb} KB${m.intervals ? ' &middot; ' + m.intervals + ' intervals' : ''}${m.samples ? ' &middot; ' + m.samples.toLocaleString() + ' samples' : ''}${m.reward ? ' &middot; reward: ' + m.reward.toFixed(1) : ''}</div>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-label">Ready Bots</div>
-                    <div class="stat-value">${stats.ready_bots || 0}</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Open Arenas</div>
-                    <div class="stat-value">${stats.open_arenas || 0}</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Training Samples</div>
-                    <div class="stat-value">${stats.ppo_samples || 0}</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Total Rewards</div>
-                    <div class="stat-value">${stats.ppo_rewards || 0}</div>
-                </div>
-            `;
-        }
+                <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();loadModel('${m.filename}')" style="flex-shrink:0;margin-left:8px">Load</button>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = `<div style="color:#ef4444;padding:12px">Error: ${e.message}</div>`;
+    }
+}
 
-        function updateBotsTable(bots) {
-            const tbody = document.getElementById('botsTableBody');
-            if (bots.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px;">No bots found</td></tr>';
-                return;
-            }
-
-            tbody.innerHTML = bots.map(bot => `
-                <tr>
-                    <td><strong>${bot.name}</strong></td>
-                    <td><span class="status-${bot.status}">${bot.status.toUpperCase()}</span></td>
-                    <td>${bot.pair || 'None'}</td>
-                    <td>${bot.arena || 'None'}</td>
-                    <td>v${bot.model_version}</td>
-                    <td>${bot.tick_rate.toFixed(2)} TPS</td>
-                </tr>
-            `).join('');
-        }
-
-        function updateArenasTable(arenas) {
-            const tbody = document.getElementById('arenasTableBody');
-            if (arenas.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; padding: 20px;">No arenas found</td></tr>';
-                return;
-            }
-
-            tbody.innerHTML = arenas.map(arena => `
-                <tr>
-                    <td><strong>${arena.name}</strong></td>
-                    <td><span class="arena-${arena.status}">${arena.status.toUpperCase()}</span></td>
-                    <td>${arena.spawn_coords.map(c => `[${c.join(', ')}]`).join(', ')}</td>
-                </tr>
-            `).join('');
-        }
-
-        function updateTrainingChart(training) {
-            const now = new Date().toLocaleTimeString();
-            trainingData.push({
-                time: now,
-                samples: training.total_samples
-            });
-
-            // Keep only last 20 data points
-            if (trainingData.length > 20) {
-                trainingData.shift();
-            }
-
-            trainingChart.data.labels = trainingData.map(d => d.time);
-            trainingChart.data.datasets[0].data = trainingData.map(d => d.samples);
-            trainingChart.update('none');
-        }
-
-        function updatePerformanceChart(bots) {
-            const botNames = bots.map(b => b.name);
-            const tickRates = bots.map(b => b.tick_rate);
-
-            performanceChart.data.labels = botNames;
-            performanceChart.data.datasets[0].data = tickRates;
-            performanceChart.update('none');
-        }
-
-        function updateConfigSections(actionSpace, observationSpace) {
-            const actionConfig = document.getElementById('actionSpaceConfig');
-            actionConfig.innerHTML = Object.entries(actionSpace).map(([key, value]) => `
-                <div class="config-item">
-                    <span class="config-label">${key}:</span>
-                    <span>${typeof value === 'boolean' ? (value ? '✓' : '✗') : value}</span>
-                </div>
-            `).join('');
-
-            const obsConfig = document.getElementById('observationSpaceConfig');
-            obsConfig.innerHTML = Object.entries(observationSpace).map(([key, value]) => `
-                <div class="config-item">
-                    <span class="config-label">${key}:</span>
-                    <span>${typeof value === 'boolean' ? (value ? '✓' : '✗') : value}</span>
-                </div>
-            `).join('');
-        }
-
-        function updateRewardChart(progression) {
-            if (!progression || progression.length === 0) return;
-
-            const intervals = progression.map(p => `Interval ${p.interval}`);
-            const totalRewards = progression.map(p => p.total_rewards);
-            const avgRewards = progression.map(p => p.avg_reward);
-
-            rewardChart.data.labels = intervals;
-            rewardChart.data.datasets[0].data = totalRewards;
-            rewardChart.data.datasets[1].data = avgRewards;
-            rewardChart.update('none');
-        }
-
-        function updateLossChart(progression) {
-            if (!progression || progression.length === 0) return;
-
-            const intervals = progression.map(p => `Interval ${p.interval}`);
-            const losses = progression.map(p => p.loss);
-
-            lossChart.data.labels = intervals;
-            lossChart.data.datasets[0].data = losses;
-            lossChart.update('none');
-        }
-
-        function updateLogConsole(logs) {
-            const consoleDiv = document.getElementById('logConsole');
-            const countSpan = document.getElementById('logCount');
-            
-            if (!logs || logs.length === 0) {
-                consoleDiv.innerHTML = '<div class="log-entry">No training logs yet. Waiting for first 100-tick interval...</div>';
-                countSpan.textContent = '0 logs';
-                return;
-            }
-
-            countSpan.textContent = `${logs.length} logs`;
-
-            // Show last 20 logs (most recent first)
-            const recentLogs = logs.slice(-20).reverse();
-            const totalLogs = logs.length;
-            consoleDiv.innerHTML = recentLogs.map((log, idx) => {
-                const time = new Date(log.timestamp).toLocaleTimeString();
-                const stats = log.training_stats;
-                const botStats = log.bot_statistics;
-                const intervalNum = totalLogs - idx; // Calculate interval number correctly
-                
-                let botInfo = '';
-                for (const [botName, botData] of Object.entries(botStats)) {
-                    botInfo += `<span class="log-bot">${botName}</span>: score=<span class="log-value">${botData.score.toFixed(2)}</span>, ticks=<span class="log-value">${botData.tick_count}</span>; `;
-                }
-                
-                return `
-                    <div class="log-entry">
-                        <div><span class="log-timestamp">[${time}]</span> <span class="log-metric">Interval ${intervalNum}</span></div>
-                        <div>
-                            <span class="log-metric">Samples:</span> <span class="log-value">${stats.samples_trained}</span> | 
-                            <span class="log-metric">Loss:</span> <span class="log-value">${stats.loss.toFixed(4)}</span> | 
-                            <span class="log-metric">Total Rewards:</span> <span class="log-value">${stats.total_rewards.toFixed(2)}</span> | 
-                            <span class="log-metric">Avg Reward:</span> <span class="log-value">${stats.avg_reward_per_sample.toFixed(4)}</span>
-                        </div>
-                        <div style="margin-top: 4px; font-size: 0.9em;">
-                            ${botInfo}
-                        </div>
-                    </div>
-                `;
-            }).join('');
-            
-            // Auto-scroll to bottom
-            consoleDiv.scrollTop = consoleDiv.scrollHeight;
-        }
-
-        function clearLogs() {
-            const consoleDiv = document.getElementById('logConsole');
-            consoleDiv.innerHTML = '<div class="log-entry">Logs cleared. Waiting for new training data...</div>';
-        }
-
-        async function refreshData() {
-            const statusBadge = document.getElementById('connectionStatus');
-            statusBadge.textContent = 'Refreshing...';
-            statusBadge.className = 'status-badge status-online pulse';
-
-            try {
-                const [gameState, stats, trainingLogs, rewardProgression] = await Promise.all([
-                    fetchGameState(),
-                    fetchStats(),
-                    fetchTrainingLogs(),
-                    fetchRewardProgression()
-                ]);
-
-                updateStatsGrid(stats);
-                updateBotsTable(gameState.bots);
-                updateArenasTable(gameState.arenas);
-                updateTrainingChart(gameState.training);
-                updatePerformanceChart(gameState.bots);
-                updateConfigSections(gameState.action_space, gameState.observation_space);
-                updateRewardChart(rewardProgression.progression);
-                updateLossChart(rewardProgression.progression);
-                updateLogConsole(trainingLogs.logs);
-                updateBotSelector(gameState.bots);
-                
-                // Auto-refresh observation if a bot is selected
-                const selector = document.getElementById('botSelector');
-                if (selector.value) {
-                    updateBotObservation();
-                }
-
-                statusBadge.textContent = 'Connected';
-                statusBadge.className = 'status-badge status-online';
-            } catch (error) {
-                statusBadge.textContent = 'Disconnected';
-                statusBadge.className = 'status-badge status-offline';
-                console.error('Error refreshing data:', error);
-            }
-        }
-
-        // Initialize on page load
-        window.addEventListener('DOMContentLoaded', () => {
-            initCharts();
+async function loadModel(filename) {
+    if (!confirm(`Load model "${filename}"?\n\nThis will replace the current model and clear training history.`)) return;
+    try {
+        const resp = await fetch(`${API}/load-model`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({filename}) });
+        const r = await resp.json();
+        if (r.status === 'success') {
+            alert(`Loaded: ${filename}\nIntervals: ${r.intervals}, Samples: ${r.samples}`);
+            closeModelModal();
             refreshData();
-            // Auto-refresh every 2 seconds
-            setInterval(refreshData, 2000);
-        });
-    </script>
+        } else {
+            alert(`Failed: ${r.message}`);
+        }
+    } catch(e) { alert(`Error: ${e.message}`); }
+}
+
+async function resetModel() {
+    if (!confirm('Start a completely fresh, untrained model?\n\nThe current model will be lost unless you saved it first.')) return;
+    try {
+        const resp = await fetch(`${API}/reset-model`, { method:'POST' });
+        const r = await resp.json();
+        if (r.status === 'success') {
+            alert('Model reset to fresh state.');
+            closeModelModal();
+            refreshData();
+        } else {
+            alert(`Failed: ${r.message}`);
+        }
+    } catch(e) { alert(`Error: ${e.message}`); }
+}
+
+document.addEventListener('click', e => {
+    if (e.target.id === 'saveModal') closeSaveModal();
+    if (e.target.id === 'modelModal') closeModelModal();
+});
+
+window.addEventListener('DOMContentLoaded', () => {
+    initCharts();
+    refreshData();
+    setInterval(refreshData, 3000);
+});
+</script>
 </body>
 </html>

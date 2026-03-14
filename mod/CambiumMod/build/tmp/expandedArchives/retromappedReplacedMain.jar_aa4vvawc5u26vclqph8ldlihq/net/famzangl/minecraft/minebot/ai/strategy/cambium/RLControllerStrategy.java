@@ -51,6 +51,22 @@ public class RLControllerStrategy extends AIStrategy {
     private Gson gson = new Gson();
     private JsonParser jsonParser = new JsonParser();
     
+    // Idle action used when API fails - prevents "stuck repeating last action" forever
+    private static final JsonObject IDLE_ACTION;
+    static {
+        JsonObject idle = new JsonObject();
+        idle.addProperty("movement", 0);
+        idle.addProperty("jump", false);
+        idle.addProperty("sneak", false);
+        idle.addProperty("sprint", false);
+        idle.addProperty("attack", false);
+        idle.addProperty("useItem", false);
+        idle.addProperty("hotbar", -1);
+        idle.addProperty("yaw", 0.0f);
+        idle.addProperty("pitch", 0.0f);
+        IDLE_ACTION = idle;
+    }
+    
     public RLControllerStrategy() {
         this.physicsController = new PhysicsController();
         this.actionConfig = new ActionSpaceConfig();
@@ -75,8 +91,11 @@ public class RLControllerStrategy extends AIStrategy {
             JsonObject action = predictAction(helper);
             
             if (action != null) {
-                // Execute action
                 executeAction(action);
+            } else {
+                // API failed - reset to idle to avoid stuck "repeating last action" forever.
+                // Without this, keys/deltas from last success persist and bot spins/moves indefinitely.
+                executeAction(IDLE_ACTION);
             }
             
             return TickResult.TICK_HANDLED;

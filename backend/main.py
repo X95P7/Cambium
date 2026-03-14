@@ -7,7 +7,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from mcrcon import MCRcon
 import asyncio
-import multiprocessing
 import botController as botController
 from BotClass import Bot
 from kits import classicKit
@@ -31,6 +30,15 @@ if os.path.exists(frontend_path):
         app.mount("/static", StaticFiles(directory=frontend_path), name="static")
     except:
         pass  # Directory might not exist yet
+
+@app.on_event("startup")
+async def _startup_idle_checker():
+    """Background loop that checks for idle bots every 10 seconds."""
+    async def _loop():
+        while True:
+            await asyncio.sleep(10)
+            _check_bot_idle()
+    asyncio.create_task(_loop())
 
 @app.get("/")
 async def read_root():
@@ -77,7 +85,7 @@ observation_space_config = {
 # Model configuration - maps bot names to model versions
 bot_model_mapping = {
     "Bot1": "0.1",
-    "Bot2": "0.0",
+    "Bot2": "0.1",
 }  # bot_name -> model_version (e.g., "0.0", "0.1", etc.)
 
 # Removed tick_times tracking - not needed anymore
@@ -98,6 +106,30 @@ def estimate_observation_dim():
         dim += 9 * 3  # 9 hotbar slots, 3 features each
     return dim
 
+# ---------------------------------------------------------------------------
+# Logging setup (must be before agent init so auto-resume can log)
+# ---------------------------------------------------------------------------
+LOGS_DIR = os.path.join(os.path.dirname(__file__), "logs")
+os.makedirs(LOGS_DIR, exist_ok=True)
+_log_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+EVENT_LOG_PATH = os.path.join(LOGS_DIR, f"events_{_log_session_id}.log")
+
+def _log_event(category: str, message: str, **extra):
+    """Append a timestamped event line to the event log."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    parts = f"[{ts}] [{category}] {message}"
+    if extra:
+        details = "  ".join(f"{k}={v}" for k, v in extra.items())
+        parts += f"  ({details})"
+    try:
+        with open(EVENT_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(parts + "\n")
+    except Exception:
+        pass
+    print(parts)
+
+_log_event("SERVER", "Backend process starting", session=_log_session_id)
+
 # Initialize Fast RL agent (for version 0.1)
 try:
     # Fast RL model always uses fixed 194-dim vector (7 player + 60 entities + 100 blocks + 27 inventory)
@@ -111,6 +143,34 @@ try:
         hidden_dim=256
     )
     print(f"Fast RL agent initialized successfully: obs_dim={obs_dim}, device={rl_device}")
+
+    # Auto-resume: look for the most recent .pt file in models/
+    _models_dir = os.path.join(os.path.dirname(__file__), "models")
+    if os.path.isdir(_models_dir):
+        import glob as _glob
+        _pt_files = sorted(_glob.glob(os.path.join(_models_dir, "model_*.pt")),
+                           key=os.path.getmtime)
+        if _pt_files:
+            _latest = _pt_files[-1]
+            try:
+                fast_rl_agent.load(_latest)
+                _log_event("SERVER", f"Resumed model from {_latest}")
+                _stats_file = _latest.replace(".pt", "_stats.json")
+                if os.path.exists(_stats_file):
+                    with open(_stats_file) as _sf:
+                        _prev = json.load(_sf)
+                    _log_event("SERVER", "Previous session stats",
+                               intervals=_prev.get('training_intervals', 0),
+                               samples=_prev.get('total_samples_trained', 0),
+                               reward=_prev.get('total_reward_accumulated', 0),
+                               reason=_prev.get('reason', 'manual'))
+            except Exception as _le:
+                print(f"[STARTUP] Could not load {_latest}: {_le} — starting fresh")
+        else:
+            print("[STARTUP] No saved models found — starting fresh")
+    else:
+        print("[STARTUP] Models directory not found — starting fresh")
+
     ppo_agent = None
 except Exception as e:
     print(f"ERROR initializing Fast RL agent: {e}")
@@ -132,8 +192,11 @@ bot_tick_counts = {}  # bot_name -> tick count
 BACKPROP_INTERVAL = 200  # Train every 200 ticks (more samples = lower variance)
 
 # Episode length cap - force episode end after N seconds (prevents 10-15 min duels)
-episode_start_time = None  # wall-clock when current episode started (buffer first entry)
+bot_episode_start = {}  # bot_name -> wall-clock time when current episode started
 MAX_EPISODE_LENGTH_SEC = 15
+timeout_killed_bots = set()  # bots killed by episode timeout — death endpoint should ignore these
+bot_episode_damage_dealt: Dict[str, int] = {}  # bot_name -> count of damage_dealt events this episode
+_bot_reset_until = {}  # bot_name -> timestamp: suppress damage events from /kill commands during reset
 
 # Tick timing tracking for TPS calculation
 tick_times = {}  # bot_name -> list of timestamps
@@ -141,6 +204,181 @@ tick_times = {}  # bot_name -> list of timestamps
 # Training log tracking - stores statistics every 100 ticks
 training_logs = []  # List of dicts with timestamp, stats, rewards, etc.
 MAX_LOG_ENTRIES = 1000  # Keep last 1000 log entries
+
+# ---------------------------------------------------------------------------
+# File-based training logger (human-readable .log + machine-readable .csv)
+# ---------------------------------------------------------------------------
+TRAINING_LOG_PATH = os.path.join(LOGS_DIR, f"training_{_log_session_id}.log")
+TRAINING_CSV_PATH = os.path.join(LOGS_DIR, f"training_{_log_session_id}.csv")
+_csv_header_written = False
+_training_interval_counter = 0
+
+# Bot activity tracker — detect disconnects via inactivity
+_bot_last_seen: Dict[str, float] = {}
+_bot_connected: Dict[str, bool] = {}
+BOT_IDLE_TIMEOUT_SEC = 30  # consider a bot disconnected after 30s of silence
+
+def _mark_bot_active(bot_name: str):
+    """Called on every predict-action / add-reward to track bot liveness."""
+    now = time.time()
+    prev = _bot_last_seen.get(bot_name)
+    _bot_last_seen[bot_name] = now
+
+    if not _bot_connected.get(bot_name):
+        _bot_connected[bot_name] = True
+        if prev is None:
+            _log_event("BOT", f"{bot_name} connected (first seen)")
+        else:
+            gap = now - prev
+            _log_event("BOT", f"{bot_name} reconnected after {gap:.0f}s idle")
+
+def _check_bot_idle():
+    """Check all known bots for idle timeout. Call periodically."""
+    now = time.time()
+    for bot_name, last in list(_bot_last_seen.items()):
+        if _bot_connected.get(bot_name) and (now - last) > BOT_IDLE_TIMEOUT_SEC:
+            _bot_connected[bot_name] = False
+            idle_for = now - last
+            _log_event("BOT", f"{bot_name} went idle (no data for {idle_for:.0f}s)")
+
+
+# ---------------------------------------------------------------------------
+# Auto-save & crash defense
+# ---------------------------------------------------------------------------
+AUTOSAVE_INTERVAL = 50  # Save model every N training intervals
+_autosave_counter = 0
+AUTOSAVE_DIR = os.path.join(os.path.dirname(__file__), "models")
+os.makedirs(AUTOSAVE_DIR, exist_ok=True)
+
+_AUTOSAVE_PREFIX = "autosave_"
+
+def _autosave_model(reason: str = "autosave"):
+    """Save the model to disk. Overwrites the single rolling autosave file.
+    Shutdown saves get a unique name; periodic saves overwrite the same file."""
+    agent = fast_rl_agent or ppo_agent
+    if agent is None:
+        print(f"[AUTOSAVE] Skipped ({reason}): no agent")
+        return
+    try:
+        total_intervals = len(training_logs)
+        total_reward_all = 0.0
+        total_samples_all = 0
+        for log in training_logs:
+            ts_stats = log.get("training_stats", {})
+            total_reward_all += ts_stats.get("total_rewards", 0.0)
+            total_samples_all += ts_stats.get("samples_trained", 0)
+
+        summary = {
+            "saved_at": datetime.now().isoformat(),
+            "reason": reason,
+            "training_intervals": total_intervals,
+            "total_samples_trained": total_samples_all,
+            "total_reward_accumulated": round(total_reward_all, 4),
+            "avg_reward_per_sample": round(total_reward_all / max(total_samples_all, 1), 6),
+            "bot_scores": agent.bot_scores if hasattr(agent, "bot_scores") else {},
+        }
+
+        if reason == "shutdown":
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            model_path = os.path.join(AUTOSAVE_DIR, f"model_{ts}_shutdown.pt")
+            stats_path = os.path.join(AUTOSAVE_DIR, f"model_{ts}_shutdown_stats.json")
+        else:
+            model_path = os.path.join(AUTOSAVE_DIR, f"{_AUTOSAVE_PREFIX}latest.pt")
+            stats_path = os.path.join(AUTOSAVE_DIR, f"{_AUTOSAVE_PREFIX}latest_stats.json")
+
+        agent.save(model_path)
+        with open(stats_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+
+        print(f"[AUTOSAVE] Model saved ({reason}): {model_path}  "
+              f"intervals={total_intervals}, samples={total_samples_all}, "
+              f"reward={total_reward_all:.2f}")
+    except Exception as e:
+        print(f"[AUTOSAVE] FAILED ({reason}): {e}")
+        import traceback
+        traceback.print_exc()
+
+
+
+
+def _write_training_log(stats: Dict, reward_type_data: Dict, bot_stats: Dict,
+                        samples: int, trigger_reason: str):
+    """Append one interval's stats to the .log and .csv files."""
+    global _csv_header_written, _training_interval_counter
+    _training_interval_counter += 1
+    interval = _training_interval_counter
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    loss        = stats.get("loss", 0.0)
+    policy_loss = stats.get("policy_loss", 0.0)
+    value_loss  = stats.get("value_loss", 0.0)
+    entropy     = stats.get("entropy", 0.0)
+    ret_mean    = stats.get("return_mean", 0.0)
+    ret_std     = stats.get("return_std", 0.0)
+    score       = stats.get("score", 0.0)
+    ppo_updates = stats.get("ppo_updates", 0)
+    avg_reward  = score / max(samples, 1)
+
+    # Per-reward-type breakdown
+    rt_lines = []
+    rt_csv_parts = {}
+    for rtype in sorted(reward_type_data.keys()):
+        rd = reward_type_data[rtype]
+        cnt = rd.get("count", 0)
+        amt = rd.get("amount", 0.0)
+        rt_lines.append(f"    {rtype:25s}  count={cnt:4d}  total={amt:+9.4f}  avg={amt/max(cnt,1):+.4f}")
+        rt_csv_parts[f"r_{rtype}_count"] = cnt
+        rt_csv_parts[f"r_{rtype}_total"] = round(amt, 4)
+
+    # --- Human-readable log ---
+    block = [
+        f"{'='*70}",
+        f"  Interval {interval}  |  {ts}  |  trigger: {trigger_reason}",
+        f"{'='*70}",
+        f"  Samples:        {samples}",
+        f"  PPO updates:    {ppo_updates}",
+        f"  Total reward:   {score:+.4f}",
+        f"  Avg reward/step:{avg_reward:+.6f}",
+        f"  Return mean:    {ret_mean:+.4f}   std: {ret_std:.4f}",
+        f"  Loss:           {loss:.6f}  (policy={policy_loss:.6f}  value={value_loss:.6f})",
+        f"  Entropy:        {entropy:.4f}",
+        f"  Reward breakdown:",
+    ]
+    if rt_lines:
+        block.extend(rt_lines)
+    else:
+        block.append("    (none)")
+
+    # Bot scores
+    for bname, bdata in bot_stats.items():
+        block.append(f"  Bot {bname}: score={bdata.get('score',0):.2f}  ticks={bdata.get('tick_count',0)}  status={bdata.get('status','?')}")
+    block.append("")
+
+    with open(TRAINING_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write("\n".join(block) + "\n")
+
+    # --- CSV (one row per interval, easy to graph) ---
+    base_fields = {
+        "interval": interval,
+        "timestamp": ts,
+        "samples": samples,
+        "ppo_updates": ppo_updates,
+        "total_reward": round(score, 4),
+        "avg_reward": round(avg_reward, 6),
+        "return_mean": round(ret_mean, 4),
+        "return_std": round(ret_std, 4),
+        "loss": round(loss, 6),
+        "policy_loss": round(policy_loss, 6),
+        "value_loss": round(value_loss, 6),
+        "entropy": round(entropy, 4),
+    }
+    row = {**base_fields, **rt_csv_parts}
+
+    with open(TRAINING_CSV_PATH, "a", encoding="utf-8") as f:
+        if not _csv_header_written:
+            f.write(",".join(row.keys()) + "\n")
+            _csv_header_written = True
+        f.write(",".join(str(v) for v in row.values()) + "\n")
 
 # Action caching to reduce computation (predictions are throttled in mod, but add safety here)
 bot_last_actions = {}  # bot_name -> last action dict
@@ -163,6 +401,35 @@ def normalize_yaw(yaw):
     while yaw < -180:
         yaw += 360
     return yaw
+
+def _estimate_reward_amount(event_type: str, event: dict) -> float:
+    """Single source of truth for reward amounts (used by dashboard logging).
+    Must stay in sync with FastRLAgent._compute_reward."""
+    if event_type == 'damage_dealt':
+        if 'damage_percentage' in event:
+            return event.get('damage_percentage', 0) * 10.0
+        return event.get('amount', 0) * 1.0
+    if event_type == 'damage_taken':
+        return -event.get('amount', 0) * 0.1
+    if event_type == 'good_aim':
+        return event.get('amount', 0.1) * 0.03
+    if event_type == 'proximity':
+        return event.get('amount', 0) * 0.5
+    if event_type == 'pitch_control':
+        return event.get('amount', 0) * 0.5
+    if event_type == 'extreme_pitch_penalty':
+        return event.get('amount', -0.03)
+    if event_type == 'aim_hold':
+        return event.get('amount', 0.05) * 0.6
+    if event_type == 'won_duel':
+        return 15.0
+    if event_type == 'death':
+        return -2.0
+    if event_type == 'episode_timeout':
+        return -1.0
+    if event_type == 'no_damage_penalty':
+        return -0.5
+    return 0.0
 
 def calculate_auto_rewards(bot_name: str, observation: Dict) -> List[Dict]:
     """
@@ -198,12 +465,9 @@ def calculate_auto_rewards(bot_name: str, observation: Dict) -> List[Dict]:
     # Constant reward within 3 blocks, then drops off beyond that
     if nearest_enemy is not None:
         if min_dist <= 3.0:
-            # Full reward when within melee range (0-3 blocks)
-            proximity_reward = 0.1
+            proximity_reward = 0.01
         elif min_dist < 10.0:
-            # Reward drops off linearly from 3 to 10 blocks
-            # 3 blocks = 0.1, 10 blocks = 0.0
-            proximity_reward = 0.1 * (1.0 - (min_dist - 3.0) / 7.0)
+            proximity_reward = 0.01 * (1.0 - (min_dist - 3.0) / 7.0)
         else:
             # No reward beyond 10 blocks
             proximity_reward = 0.0
@@ -220,8 +484,9 @@ def calculate_auto_rewards(bot_name: str, observation: Dict) -> List[Dict]:
     current_pitch = player.get('pitch', 0)
     pitch_error = abs(current_pitch)
     
-    # pitch=0° → 0.15, pitch=45° → 0.075, pitch=90° → 0.0
-    pitch_reward = max(0.0, (1.0 - pitch_error / 90.0) * 0.15)
+    # pitch=0° → 0.02, pitch=45° → 0.01, pitch=90° → 0.0
+    # Kept small: fires every tick so total volume is high relative to sparse combat rewards
+    pitch_reward = max(0.0, (1.0 - pitch_error / 90.0) * 0.02)
     
     events.append({
         "type": "pitch_control",
@@ -229,20 +494,19 @@ def calculate_auto_rewards(bot_name: str, observation: Dict) -> List[Dict]:
     })
     
     # === REWARD 3: Extreme Pitch Penalty ===
-    # Penalize looking at sky/ground (|pitch| > 60°) to discourage spinning-while-looking-down.
+    # Penalize looking at sky/ground (|pitch| > 60°).
     if pitch_error > 60.0:
         events.append({
             "type": "extreme_pitch_penalty",
-            "amount": -0.05
+            "amount": -0.03
         })
     
     # === REWARD 4: Aim Hold ===
-    # Bonus when bot is on target AND pitch is level. Rewards "holding aim" over "sweeping past".
-    # Only fires when both conditions met: angle to enemy < 20° and |pitch| < 30°.
-    # Target uses body center (relativeY + 0.9) to match mod's aim calculation for melee hitbox.
+    # Bonus when on target AND pitch is level. Fires every tick when aimed, so kept small.
+    # ~30 aimed ticks/episode × 0.05 = ~1.5 total — guides toward enemy without dominating.
     if nearest_enemy is not None and pitch_error < 30.0:
         dx = nearest_enemy.get('relativeX', 0)
-        dy = nearest_enemy.get('relativeY', 0) + 0.9  # Aim at body center, not feet
+        dy = nearest_enemy.get('relativeY', 0) + 0.9
         dz = nearest_enemy.get('relativeZ', 0)
         horizontal_dist = (dx**2 + dz**2)**0.5
         if horizontal_dist > 0.1:
@@ -256,30 +520,49 @@ def calculate_auto_rewards(bot_name: str, observation: Dict) -> List[Dict]:
             if max_angle < 20.0:
                 events.append({
                     "type": "aim_hold",
-                    "amount": 0.2
+                    "amount": 0.05
                 })
     
     return events
 
-# Use multiprocessing for running the RCON command in a separate process
 def mc_command(command: str):
     try:
         with MCRcon(RCON_HOST, RCON_PASSWORD, port=RCON_PORT) as mcr:
             response = mcr.command(command)
         return response
     except Exception as e:
+        print(f"[RCON ERROR] Command '{command}' failed: {e}")
         return str(e)
 
-# Helper function to run the command in a separate process
-def run_rcon_command(command: str):
-    with multiprocessing.Pool(1) as pool:
-        result = pool.apply(mc_command, (command,))
-    return result
+from concurrent.futures import ProcessPoolExecutor
+_rcon_pool = ProcessPoolExecutor(max_workers=2)
+
+_gamerules_set = False
+
+_RCON_SPACING_SEC = 0.05  # seconds between RCON commands to avoid ConcurrentModificationException
+_last_rcon_time = 0.0
 
 async def send_mc_command(command: str):
+    global _gamerules_set, _last_rcon_time
     loop = asyncio.get_event_loop()
-    # Run the RCON command in a separate process
-    result = await loop.run_in_executor(None, run_rcon_command, command)
+    if not _gamerules_set:
+        _gamerules_set = True
+        await loop.run_in_executor(_rcon_pool, mc_command, "/gamerule sendCommandFeedback false")
+        await asyncio.sleep(_RCON_SPACING_SEC)
+        await loop.run_in_executor(_rcon_pool, mc_command, "/gamerule commandBlockOutput false")
+        await asyncio.sleep(_RCON_SPACING_SEC)
+        await loop.run_in_executor(_rcon_pool, mc_command, "/gamerule logAdminCommands false")
+        await asyncio.sleep(_RCON_SPACING_SEC)
+
+    # Space out commands so the server tick can finish between entity modifications
+    now = time.time()
+    elapsed = now - _last_rcon_time
+    if elapsed < _RCON_SPACING_SEC:
+        await asyncio.sleep(_RCON_SPACING_SEC - elapsed)
+
+    result = await loop.run_in_executor(_rcon_pool, mc_command, command)
+    _last_rcon_time = time.time()
+    print(f"[RCON] '{command}' -> {result}")
     return {"sent_command": command, "response": result}
 
 async def calibration_mode_action(bot_name: str):
@@ -391,49 +674,46 @@ async def trigger_backprop(bot_name: str = None):
         if agent is None:
             return {"status": "skipped", "reason": "no_agent"}
         
-        total_samples = len(agent.observations)
+        # Aggregate stats across all per-bot buffers
+        all_rewards = []
+        all_actions = []
+        total_samples = 0
+        if fast_rl_agent and hasattr(fast_rl_agent, '_buffers'):
+            for buf in fast_rl_agent._buffers.values():
+                total_samples += len(buf.observations)
+                all_rewards.extend(buf.rewards)
+                all_actions.extend(buf.actions)
+        else:
+            total_samples = len(agent.observations) if hasattr(agent, 'observations') else 0
+            all_rewards = list(agent.rewards) if hasattr(agent, 'rewards') else []
+            all_actions = list(agent.actions) if hasattr(agent, 'actions') else []
+
         if total_samples < 64:
             print(f"Skipping backprop for {bot_name or 'all bots'}: insufficient data ({total_samples} samples, need 64)")
             return {"status": "skipped", "reason": "insufficient_data", "samples": total_samples}
-        
-        # Calculate statistics before training
-        total_rewards_before = sum(agent.rewards) if agent.rewards else 0.0
-        avg_reward_before = total_rewards_before / len(agent.rewards) if agent.rewards else 0.0
+
+        total_rewards_before = sum(all_rewards) if all_rewards else 0.0
+        avg_reward_before = total_rewards_before / len(all_rewards) if all_rewards else 0.0
         bot_rewards_before = {}
         if fast_rl_agent:
             bot_rewards_before = {name: score for name, score in fast_rl_agent.bot_scores.items()}
-        
-        # Check action diversity (how many unique actions in the batch)
-        if agent.actions:
-            # Convert action dicts to tuples for hashing (multi-discrete actions are dicts)
-            try:
-                if isinstance(agent.actions[0], dict):
-                    # For FastRLAgent: actions are dicts with keys like 'movement', 'jump', 'attack', 'yaw', 'pitch'
-                    # Convert to tuple of values in consistent order
-                    action_keys = ['movement', 'jump', 'attack', 'yaw', 'pitch']
-                    action_tuples = [tuple(a.get(k, 0) for k in action_keys) for a in agent.actions]
-                else:
-                    # For PPO agent: actions might be integers or other types
-                    action_tuples = agent.actions
-                unique_actions = len(set(action_tuples))
-                action_diversity = unique_actions / len(agent.actions) if agent.actions else 0.0
-                print(f"Training with {total_samples} samples, rewards: min={min(agent.rewards) if agent.rewards else 0:.4f}, "
-                      f"max={max(agent.rewards) if agent.rewards else 0:.4f}, "
-                      f"mean={avg_reward_before:.4f}, sum={total_rewards_before:.4f}, "
-                      f"action_diversity={action_diversity:.2%} ({unique_actions}/{len(agent.actions)} unique)")
-            except (IndexError, AttributeError, TypeError) as e:
-                # Fallback if action structure is unexpected
-                print(f"Training with {total_samples} samples, rewards: min={min(agent.rewards) if agent.rewards else 0:.4f}, "
-                      f"max={max(agent.rewards) if agent.rewards else 0:.4f}, "
-                      f"mean={avg_reward_before:.4f}, sum={total_rewards_before:.4f}, "
-                      f"(action diversity calculation skipped: {e})")
-        else:
-            print(f"Training with {total_samples} samples, but no actions recorded!")
+
+        try:
+            if all_actions and isinstance(all_actions[0], dict):
+                action_keys = ['movement', 'jump', 'attack', 'yaw', 'pitch']
+                action_tuples = [tuple(a.get(k, 0) for k in action_keys) for a in all_actions]
+            else:
+                action_tuples = all_actions
+            unique_actions = len(set(action_tuples)) if action_tuples else 0
+            action_diversity = unique_actions / len(all_actions) if all_actions else 0.0
+            print(f"Training with {total_samples} samples, rewards: min={min(all_rewards) if all_rewards else 0:.4f}, "
+                  f"max={max(all_rewards) if all_rewards else 0:.4f}, "
+                  f"mean={avg_reward_before:.4f}, sum={total_rewards_before:.4f}, "
+                  f"action_diversity={action_diversity:.2%} ({unique_actions}/{len(all_actions)} unique)")
+        except (IndexError, AttributeError, TypeError) as e:
+            print(f"Training with {total_samples} samples, sum={total_rewards_before:.4f} (stats skipped: {e})")
         
         stats = agent.train(batch_size=64, epochs=4)
-        # Reset episode timer after buffer clear (train clears buffers)
-        global episode_start_time
-        episode_start_time = time.time()
         print(f"Backprop completed for {bot_name or 'all bots'}: loss={stats.get('loss', 0):.6f}, "
               f"policy_loss={stats.get('policy_loss', 0):.6f}, entropy={stats.get('entropy', 0):.4f}")
         
@@ -446,19 +726,18 @@ async def trigger_backprop(bot_name: str = None):
         # Aggregate reward type data from the interval (before training clears the buffer)
         reward_type_data = {}  # {type: {'count': int, 'amount': float}}
         
-        # First, try to get from fast_rl_agent.reward_types
-        if fast_rl_agent and hasattr(fast_rl_agent, 'reward_types'):
-            for reward_type_dict in fast_rl_agent.reward_types:
-                for reward_type, data in reward_type_dict.items():
-                    if reward_type not in reward_type_data:
-                        reward_type_data[reward_type] = {'count': 0, 'amount': 0.0}
-                    # Handle both old format (just count) and new format (dict with count/amount)
-                    if isinstance(data, dict):
-                        reward_type_data[reward_type]['count'] += data.get('count', 0)
-                        reward_type_data[reward_type]['amount'] += data.get('amount', 0.0)
-                    else:
-                        # Old format - just a count
-                        reward_type_data[reward_type]['count'] += data
+        # Collect reward types from all per-bot buffers
+        if fast_rl_agent and hasattr(fast_rl_agent, '_buffers'):
+            for buf in fast_rl_agent._buffers.values():
+                for reward_type_dict in buf.reward_types:
+                    for reward_type, data in reward_type_dict.items():
+                        if reward_type not in reward_type_data:
+                            reward_type_data[reward_type] = {'count': 0, 'amount': 0.0}
+                        if isinstance(data, dict):
+                            reward_type_data[reward_type]['count'] += data.get('count', 0)
+                            reward_type_data[reward_type]['amount'] += data.get('amount', 0.0)
+                        else:
+                            reward_type_data[reward_type]['count'] += data
         
         # Also compute from bot_reward_events as backup (events that occurred since last backprop)
         # This ensures we capture all events even if fast_rl_agent.reward_types is incomplete
@@ -489,35 +768,7 @@ async def trigger_backprop(bot_name: str = None):
                                 if event_type not in reward_type_data:
                                     reward_type_data[event_type] = {'count': 0, 'amount': 0.0}
                                 reward_type_data[event_type]['count'] += 1
-                                # Calculate reward amount (same logic as FastRLAgent.add_reward)
-                                amount = 0.0
-                                if event_type == 'damage_dealt':
-                                    if 'damage_percentage' in event:
-                                        amount = event.get('damage_percentage', 0) * 10.0
-                                    else:
-                                        amount = event.get('amount', 0) * 1.0
-                                elif event_type == 'damage_taken':
-                                    amount = -event.get('amount', 0) * 0.5
-                                elif event_type == 'good_aim':
-                                    amount = event.get('amount', 0.1)
-                                elif event_type == 'proximity':
-                                    amount = event.get('amount', 0)
-                                elif event_type == 'survival':
-                                    amount = event.get('amount', 0)
-                                elif event_type == 'yaw_exploration':
-                                    amount = event.get('amount', 0)
-                                elif event_type == 'pitch_control':
-                                    amount = event.get('amount', 0)
-                                elif event_type == 'extreme_pitch_penalty':
-                                    amount = event.get('amount', -0.05)
-                                elif event_type == 'aim_hold':
-                                    amount = event.get('amount', 0.2)
-                                elif event_type == 'won_duel':
-                                    amount = 10.0
-                                elif event_type == 'death':
-                                    amount = -1.0
-                                elif event_type == 'episode_timeout':
-                                    amount = event.get('amount', -0.1)
+                                amount = _estimate_reward_amount(event_type, event)
                                 reward_type_data[event_type]['amount'] += amount
                     except (ValueError, TypeError):
                         continue
@@ -536,7 +787,7 @@ async def trigger_backprop(bot_name: str = None):
                 "status": bot.status,
                 "tick_count": bot_tick_counts.get(bot_name_key, 0),
                 "score": fast_rl_agent.bot_scores.get(bot_name_key, 0.0) if fast_rl_agent else 0.0,
-                "model_version": bot_model_mapping.get(bot_name_key, "0.0")
+                "model_version": bot_model_mapping.get(bot_name_key, "0.1")
             }
         
         # Create log entry
@@ -547,10 +798,13 @@ async def trigger_backprop(bot_name: str = None):
             "training_stats": {
                 "samples_trained": samples_trained,
                 "loss": loss,
-                "total_rewards": total_rewards_for_interval,  # Total rewards collected in this 400-tick interval
+                "policy_loss": stats.get("policy_loss", 0.0),
+                "value_loss": stats.get("value_loss", 0.0),
+                "entropy": stats.get("entropy", 0.0),
+                "total_rewards": total_rewards_for_interval,
                 "avg_reward_per_sample": avg_reward_before,
                 "reward_delta": total_rewards_for_interval - total_rewards_before,
-                "reward_types": reward_type_data  # Data by reward type: {type: {'count': int, 'amount': float}}
+                "reward_types": reward_type_data
             },
             "bot_statistics": bot_stats,
             "system_stats": {
@@ -568,7 +822,21 @@ async def trigger_backprop(bot_name: str = None):
         # Keep only last MAX_LOG_ENTRIES
         if len(training_logs) > MAX_LOG_ENTRIES:
             training_logs.pop(0)
-        
+
+        # Write to persistent log files
+        try:
+            _write_training_log(stats, reward_type_data, bot_stats,
+                                samples_trained, bot_name or "all")
+        except Exception as log_err:
+            print(f"[LOG] Failed to write training log: {log_err}")
+
+        # Mark model as modified so shutdown saves are meaningful
+        global _autosave_counter
+        _autosave_counter += 1
+        if _autosave_counter >= AUTOSAVE_INTERVAL:
+            _autosave_counter = 0
+            _autosave_model(f"interval_{len(training_logs)}")
+
         return stats
     except Exception as e:
         print(f"Error in backprop: {e}")
@@ -577,27 +845,26 @@ async def trigger_backprop(bot_name: str = None):
         return {"status": "error", "message": str(e)}
 
 async def _reset_bots_after_timeout(bot):
-    """Reset both bots after episode timeout - mirrors the death handler reset."""
+    """Reset both bots after episode timeout — TP back, re-kit, and re-fight.
+    No /kill needed: giveKit already clears inventory, heals to full, and
+    fightBots applies saturation + teleports. Skipping /kill avoids the
+    1-second respawn wait and phantom damage_taken events."""
     try:
         if bot is None:
             return
-        # Open arena
         if hasattr(bot, 'arena') and bot.arena:
             bot.arena.status = "open"
-        # Reset both bots and start new duel
         if hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
+            suppress_until = time.time() + 2.0
+            _bot_reset_until[bot.name] = suppress_until
+            _bot_reset_until[bot.pair.name] = suppress_until
             bot.updateBot("ready")
             bot.pair.updateBot("ready")
-            await giveKit(bot)
-            await giveKit(bot.pair)
-            await send_mc_command(f"/effect {bot.name} minecraft:instant_health 1 100")
-            await send_mc_command(f"/effect {bot.pair.name} minecraft:instant_health 1 100")
             await fightBots(bot, bot.pair)
-            await send_mc_command(f"/say Episode timeout! Resetting {bot.name} and {bot.pair.name}.")
         else:
+            _bot_reset_until[bot.name] = time.time() + 2.0
             bot.updateBot("ready")
             await giveKit(bot)
-            await send_mc_command(f"/effect {bot.name} minecraft:instant_health 1 100")
     except Exception as e:
         print(f"[RESET] Error resetting bots after timeout: {e}")
         import traceback
@@ -635,10 +902,9 @@ async def predict_action(version: str, request: Request):
     observation = data.get("observation", {})
     action_space = data.get("action_space", action_space_config)
     bot_name = data.get("bot_name", "unknown")
-    
-    #print(f"[PREDICT] Bot: {bot_name}, Version: {version}")
-    sys.stdout.flush()
-    
+
+    _mark_bot_active(bot_name)
+
     # IMPORTANT: Increment tick count FIRST for ALL versions (this is the accurate tick counter)
     if bot_name not in bot_tick_counts:
         bot_tick_counts[bot_name] = 0
@@ -740,49 +1006,88 @@ async def predict_action(version: str, request: Request):
         try:
             pred_start = time.time()
 
-            # Episode length cap: force episode end after 15 seconds
-            global episode_start_time
-            if episode_start_time is None:
-                episode_start_time = time.time()
-            elif len(fast_rl_agent.observations) > 0 and (time.time() - episode_start_time) >= MAX_EPISODE_LENGTH_SEC:
+            # Episode length cap: force episode end after 15 seconds (per-bot timer)
+            now = time.time()
+            if bot_name not in bot_episode_start:
+                bot_episode_start[bot_name] = now
+            elif len(fast_rl_agent.observations) > 0 and (now - bot_episode_start[bot_name]) >= MAX_EPISODE_LENGTH_SEC:
                 # Timeout - end episode and reset both bots (same as death)
                 timeout_event = {"type": "episode_timeout", "amount": -0.1}
                 bot = getBotByName(bot_name)
 
+                # Penalize passive play: if a bot dealt no damage this episode, add penalty
+                timeout_events_self = [timeout_event]
+                if bot_episode_damage_dealt.get(bot_name, 0) == 0:
+                    timeout_events_self.append({"type": "no_damage_penalty"})
+                    _log_event("REWARD", f"{bot_name} penalized for no damage dealt this episode")
+
                 # Add timeout reward + done for this bot
                 state = bot_states[bot_name].get("current_state", bot_states[bot_name].get("latest_observation", {}))
-                fast_rl_agent.add_reward(bot_name, state, [timeout_event])
-                fast_rl_agent.add_done(True)
+                fast_rl_agent.add_reward(bot_name, state, timeout_events_self)
+                fast_rl_agent.add_done(bot_name, True)
 
                 # Add timeout reward + done for the paired bot too
                 if bot and hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
                     pair_name = bot.pair.name
+                    timeout_events_pair = [timeout_event]
+                    if bot_episode_damage_dealt.get(pair_name, 0) == 0:
+                        timeout_events_pair.append({"type": "no_damage_penalty"})
+                        _log_event("REWARD", f"{pair_name} penalized for no damage dealt this episode")
                     if pair_name in bot_states:
-                        fast_rl_agent.add_reward(pair_name, bot_states[pair_name], [timeout_event])
-                        fast_rl_agent.add_done(True)
+                        fast_rl_agent.add_reward(pair_name, bot_states[pair_name], timeout_events_pair)
+                        fast_rl_agent.add_done(pair_name, True)
+                    # Reset paired bot's timer and damage counter
+                    bot_episode_start[pair_name] = now
+                    bot_episode_damage_dealt[pair_name] = 0
 
                 asyncio.create_task(trigger_backprop(f"episode_timeout_{bot_name}"))
-                episode_start_time = time.time()
-                print(f"[PREDICT] Episode timeout ({MAX_EPISODE_LENGTH_SEC}s) for {bot_name}, resetting both bots")
+                bot_episode_start[bot_name] = now
+                bot_episode_damage_dealt[bot_name] = 0
+                bot_tick_counts[bot_name] = 0
+                if bot and hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
+                    bot_tick_counts[bot.pair.name] = 0
+                _log_event("EPISODE", f"Timeout ({MAX_EPISODE_LENGTH_SEC}s) for {bot_name} — resetting both bots")
                 sys.stdout.flush()
 
                 # Reset bots: give kits, heal, teleport (same as death handler)
                 asyncio.create_task(_reset_bots_after_timeout(bot))
 
 
+            # Filter entities to only include the paired opponent (not spectators/user).
+            # Then sort so the opponent is always in slot 0 of the observation vector,
+            # giving the model a deterministic input layout.
+            if 'entities' in observation:
+                bot_obj = getBotByName(bot_name)
+                pair_name = None
+                if bot_obj and hasattr(bot_obj, 'pair') and bot_obj.pair and bot_obj.pair != "NONE":
+                    pair_name = bot_obj.pair.name
+                opponent = []
+                non_players = []
+                for ent in observation['entities']:
+                    if ent.get('isPlayer', False):
+                        ent_name = ent.get('name', '')
+                        if pair_name and ent_name == pair_name:
+                            opponent.append(ent)
+                        elif not ent_name:
+                            opponent.append(ent)
+                    else:
+                        non_players.append(ent)
+                observation['entities'] = opponent + non_players
+
             # Use cached observation vector if available and observation hasn't changed
+            obs_hash_filtered = hash(str(observation))
             cached_vector = None
             if bot_name in bot_last_observation_hash and bot_name in bot_cached_obs_vector:
-                if obs_hash == bot_last_observation_hash[bot_name]:
+                if obs_hash_filtered == bot_last_observation_hash[bot_name]:
                     cached_vector = bot_cached_obs_vector[bot_name]
             
             # Run synchronously - should be fast enough
-            action = fast_rl_agent.predict_action(observation, action_space, cached_vector=cached_vector)
+            action = fast_rl_agent.predict_action(observation, action_space, cached_vector=cached_vector, bot_name=bot_name)
             
             # Cache the observation vector for next time (if we computed a new one)
             if cached_vector is None and len(fast_rl_agent.observations) > 0:
                 bot_cached_obs_vector[bot_name] = fast_rl_agent.observations[-1].copy()
-                bot_last_observation_hash[bot_name] = obs_hash
+                bot_last_observation_hash[bot_name] = obs_hash_filtered
             
             # Auto-rewards applied AFTER prediction so they credit the current step
             auto_reward_events = calculate_auto_rewards(bot_name, observation)
@@ -833,10 +1138,6 @@ async def predict_action(version: str, request: Request):
         
         processing_time = time.time() - start_time
         
-        # Trigger backprop if needed (asynchronously, don't block)
-        if should_trigger_backprop:
-            asyncio.create_task(trigger_backprop(bot_name))
-        
         return {
             "action": action,
             "tick_rate": tick_rate,
@@ -861,10 +1162,6 @@ async def predict_action(version: str, request: Request):
     }
     processing_time = time.time() - start_time
     
-    # Trigger backprop if needed (asynchronously, don't block)
-    if should_trigger_backprop:
-        asyncio.create_task(trigger_backprop(bot_name))
-    
     return {
         "action": action,
         "tick_rate": tick_rate,
@@ -874,13 +1171,46 @@ async def predict_action(version: str, request: Request):
 @app.post("/bot-setup/")
 async def bot_setup(request: Request):
     """
-    Handles bot registration.
-    Creates bot, gives kit, pairs bots, and starts duel if pair found.
+    Handles bot registration and reconnection.
+    If the bot already exists (reconnecting after server crash), re-pair and re-fight.
+    Otherwise create a new bot, give kit, pair, and start duel.
     """
     data = await request.json()
     name = data.get("name")
+
+    existingBot = getBotByName(name)
+    if existingBot is not None:
+        print(f"Bot reconnected: {name} (already registered)")
+        _log_event("BOT", f"{name} reconnected via bot-setup")
+
+        # Clear old partner's reference to this bot
+        oldPair = existingBot.pair
+        if oldPair and oldPair != "NONE":
+            oldPair.pair = "NONE"
+            oldPair.updateBot("ready")
+            if hasattr(oldPair, 'arena') and oldPair.arena:
+                oldPair.arena.status = "open"
+                oldPair.arena = ""
+
+        existingBot.updateBot("ready")
+        existingBot.pair = "NONE"
+        if hasattr(existingBot, 'arena') and existingBot.arena:
+            existingBot.arena.status = "open"
+            existingBot.arena = ""
+
+        # Reset episode timer
+        bot_episode_start[name] = time.time()
+
+        await giveKit(existingBot)
+
+        move = botController.pairBot(existingBot)
+        if move == 1:
+            await fightBots(existingBot, existingBot.pair)
+            return await send_mc_command(f"/say Bot {name} reconnected and paired with {existingBot.pair.name}!")
+        else:
+            return await send_mc_command(f"/say Bot {name} reconnected. Waiting for pair...")
+
     print(f"Bot setup for: {name}")
-    
     currentBot = Bot(name, "ready", Kit(classicKit.kitStart, classicKit.kitEnd, name), "agent")
     botController.addBot(currentBot)
     await giveKit(currentBot)
@@ -907,9 +1237,21 @@ async def death(request: Request):
     
     if not bot:
         return {"status": "error", "message": f"Bot {name} not found"}
-    
+
+    # Skip if this death was caused by an episode timeout reset (timeout handler owns the reset)
+    if name in timeout_killed_bots:
+        timeout_killed_bots.discard(name)
+        return {"status": "ignored", "message": f"Death for {name} caused by episode timeout, handled elsewhere"}
+
+    _log_event("DUEL", f"{name} died", arena=getattr(bot, 'arena', None),
+               pair=getattr(bot, 'pair', None))
     bot.updateBot("dead")
-    
+
+    # Reset episode timers for both bots (new duel = fresh 15s clock)
+    bot_episode_start[name] = time.time()
+    if hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
+        bot_episode_start[bot.pair.name] = time.time()
+
     # Add reward event for death (negative reward)
     if name in bot_states:
         death_event = {"type": "death", "amount": -1.0}
@@ -928,10 +1270,10 @@ async def death(request: Request):
         
         if fast_rl_agent:
             fast_rl_agent.add_reward(name, bot_states[name], [death_event])
-            fast_rl_agent.add_done(True)
+            fast_rl_agent.add_done(name, True)
         elif ppo_agent:
             ppo_agent.add_reward(name, bot_states[name], [death_event])
-            ppo_agent.add_done(True)
+            ppo_agent.add_done(name, True)
     
     # If bot has a pair, give winning reward to the pair
     if hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
@@ -953,13 +1295,18 @@ async def death(request: Request):
             
             if fast_rl_agent:
                 fast_rl_agent.add_reward(pair_name, bot_states[pair_name], [won_duel_event])
-                fast_rl_agent.add_done(True)
+                fast_rl_agent.add_done(pair_name, True)
             elif ppo_agent:
                 ppo_agent.add_reward(pair_name, bot_states[pair_name], [won_duel_event])
-                ppo_agent.add_done(True)
+                ppo_agent.add_done(pair_name, True)
     
     # Trigger backprop when duel ends (asynchronously, don't block)
     asyncio.create_task(trigger_backprop(f"{name}_duel_end"))
+
+    # Reset per-episode damage counters
+    bot_episode_damage_dealt[name] = 0
+    if hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
+        bot_episode_damage_dealt[bot.pair.name] = 0
     
     # Open the arena if bot was in one
     if hasattr(bot, 'arena') and bot.arena:
@@ -970,6 +1317,10 @@ async def death(request: Request):
         # Reset both bots to ready
         bot.updateBot("ready")
         bot.pair.updateBot("ready")
+        await send_mc_command(f"/effect {name} minecraft:instant_health 1 100")
+        await send_mc_command(f"/effect {bot.pair.name} minecraft:instant_health 1 100")
+        await send_mc_command(f"/effect {name} minecraft:saturation 9999 100")
+        await send_mc_command(f"/effect {bot.pair.name} minecraft:saturation 9999 100")
         # Start new duel by calling fightBots directly
         await fightBots(bot, bot.pair)
         return await send_mc_command(f"/say Bot {name} has died! Starting new duel.")
@@ -994,23 +1345,22 @@ def getBotByName(name):
 
 async def fightBots(bot1, bot2):
     arena = getOpenArena()
-    if arena == None:
+    if arena is None:
         print("No open arenas")
-        return await send_mc_command(f"/say ERROR: No open areans for {bot1.name} and {bot2.name} to fight in.")
-    await giveKit(bot1)
-    await giveKit(bot2)
+        return await send_mc_command(f"/say ERROR: No open arenas for {bot1.name} and {bot2.name} to fight in.")
     bot1.updateBot("fighting")
     bot2.updateBot("fighting")
     bot1.setArena(arena)
     bot2.setArena(arena)
     arena.status = "closed"
-    print(f"/tp {bot1.name} {arena.spawnCoords[0]}")
-    await send_mc_command(f"/tp {bot1.name} {' '.join(map(str, arena.spawnCoords[0]))}")
-    await send_mc_command(f"/tp {bot2.name} {' '.join(map(str, arena.spawnCoords[1]))}")
-    
-    # Set spawn points at arena positions
-    await send_mc_command(f"/spawnpoint {bot1.name} {' '.join(map(str, arena.spawnCoords[0]))}")
-    await send_mc_command(f"/spawnpoint {bot2.name} {' '.join(map(str, arena.spawnCoords[1]))}")
+    coords1 = ' '.join(map(str, arena.spawnCoords[0]))
+    coords2 = ' '.join(map(str, arena.spawnCoords[1]))
+    await send_mc_command(f"/tp {bot1.name} {coords1}")
+    await send_mc_command(f"/tp {bot2.name} {coords2}")
+    await giveKit(bot1)
+    await giveKit(bot2)
+    await send_mc_command(f"/effect {bot1.name} minecraft:saturation 9999 100")
+    await send_mc_command(f"/effect {bot2.name} minecraft:saturation 9999 100")
 
 def getOpenArena():
     for arena in arenas:
@@ -1091,7 +1441,7 @@ async def get_model(request: Request):
     if not bot_name:
         return {"status": "error", "message": "bot_name query parameter required"}
     
-    model_version = bot_model_mapping.get(bot_name, "0.0")
+    model_version = bot_model_mapping.get(bot_name, "0.1")
     return {
         "status": "success",
         "bot_name": bot_name,
@@ -1130,29 +1480,165 @@ async def set_model(request: Request):
     
     return {"status": "error", "message": "Invalid request format"}
 
+@app.get("/list-models")
+async def list_models():
+    """List all saved .pt model files with metadata."""
+    models_dir = os.path.join(os.path.dirname(__file__), "models")
+    if not os.path.isdir(models_dir):
+        return {"models": []}
+    import glob as _g
+    pt_files = sorted(_g.glob(os.path.join(models_dir, "*.pt")),
+                      key=os.path.getmtime, reverse=True)
+    result = []
+    for pt in pt_files:
+        name = os.path.basename(pt)
+        stats_file = pt.replace(".pt", "_stats.json")
+        meta = {}
+        if os.path.exists(stats_file):
+            try:
+                with open(stats_file) as f:
+                    meta = json.load(f)
+            except Exception:
+                pass
+        result.append({
+            "filename": name,
+            "size_kb": round(os.path.getsize(pt) / 1024, 1),
+            "modified": datetime.fromtimestamp(os.path.getmtime(pt)).isoformat(),
+            "intervals": meta.get("training_intervals", 0),
+            "samples": meta.get("total_samples_trained", 0),
+            "reward": meta.get("total_reward_accumulated", 0),
+            "reason": meta.get("reason", meta.get("label", "")),
+        })
+    return {"models": result}
+
+@app.post("/load-model")
+async def load_model(request: Request):
+    """Load a specific .pt model file into the active agent."""
+    data = await request.json()
+    filename = data.get("filename", "")
+    if not filename:
+        return {"status": "error", "message": "filename is required"}
+    models_dir = os.path.join(os.path.dirname(__file__), "models")
+    model_path = os.path.join(models_dir, filename)
+    if not os.path.exists(model_path):
+        return {"status": "error", "message": f"Model not found: {filename}"}
+    agent = fast_rl_agent or ppo_agent
+    if not agent:
+        return {"status": "error", "message": "No agent initialized"}
+    try:
+        agent.load(model_path)
+        training_logs.clear()
+        _log_event("SERVER", f"Model loaded from dashboard: {filename}")
+        stats_file = model_path.replace(".pt", "_stats.json")
+        meta = {}
+        if os.path.exists(stats_file):
+            with open(stats_file) as f:
+                meta = json.load(f)
+        return {
+            "status": "success",
+            "message": f"Loaded {filename}",
+            "intervals": meta.get("training_intervals", 0),
+            "samples": meta.get("total_samples_trained", 0),
+            "reward": meta.get("total_reward_accumulated", 0),
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
+
+@app.post("/reset-model")
+async def reset_model():
+    """Reset the agent to a fresh untrained state."""
+    agent = fast_rl_agent
+    if not agent:
+        return {"status": "error", "message": "No agent initialized"}
+    try:
+        obs_dim = agent.observation_dim
+        device = agent.device
+        hidden = agent.net.shared[0].out_features
+        agent.__init__(observation_dim=obs_dim, device=str(device), hidden_dim=hidden)
+        training_logs.clear()
+        _log_event("SERVER", "Model reset to fresh state from dashboard")
+        return {"status": "success", "message": "Model reset to fresh untrained state"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
+
 @app.post("/save-model")
 async def save_model(request: Request):
     """
-    Saves the active model to disk.
+    Saves the active model and a companion stats JSON to disk.
     """
     data = await request.json()
-    model_path = data.get("path", f"models/model_{int(time.time())}.pt")
-    
-    # Create models directory if it doesn't exist
-    os.makedirs(os.path.dirname(model_path) if os.path.dirname(model_path) else "models", exist_ok=True)
-    
+    label = data.get("label", "")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_label = label.replace(" ", "_")[:40] if label else ""
+    filename = f"model_{ts}{'_' + safe_label if safe_label else ''}"
+    model_path = f"models/{filename}.pt"
+    stats_path = f"models/{filename}_stats.json"
+
+    os.makedirs("models", exist_ok=True)
+
     try:
-        ppo_agent.save(model_path)
+        agent = fast_rl_agent or ppo_agent
+
+        # Gather training summary
+        total_intervals = len(training_logs)
+        recent = training_logs[-1] if training_logs else {}
+        recent_stats = recent.get("training_stats", {})
+
+        # Aggregate reward type totals across all logged intervals
+        agg_rewards = {}
+        total_reward_all = 0.0
+        total_samples_all = 0
+        for log in training_logs:
+            ts_stats = log.get("training_stats", {})
+            total_reward_all += ts_stats.get("total_rewards", 0.0)
+            total_samples_all += ts_stats.get("samples_trained", 0)
+            for rtype, rdata in ts_stats.get("reward_types", {}).items():
+                if rtype not in agg_rewards:
+                    agg_rewards[rtype] = {"count": 0, "amount": 0.0}
+                if isinstance(rdata, dict):
+                    agg_rewards[rtype]["count"] += rdata.get("count", 0)
+                    agg_rewards[rtype]["amount"] += rdata.get("amount", 0.0)
+
+        summary = {
+            "saved_at": datetime.now().isoformat(),
+            "label": label,
+            "model_file": model_path,
+            "training_intervals": total_intervals,
+            "total_samples_trained": total_samples_all,
+            "total_reward_accumulated": round(total_reward_all, 4),
+            "avg_reward_per_sample": round(total_reward_all / max(total_samples_all, 1), 6),
+            "latest_interval": {
+                "loss": recent_stats.get("loss", 0.0),
+                "total_rewards": recent_stats.get("total_rewards", 0.0),
+                "avg_reward_per_sample": recent_stats.get("avg_reward_per_sample", 0.0),
+                "samples_trained": recent_stats.get("samples_trained", 0),
+                "reward_types": recent_stats.get("reward_types", {}),
+            },
+            "lifetime_reward_breakdown": agg_rewards,
+            "bot_scores": agent.bot_scores if hasattr(agent, "bot_scores") else {},
+        }
+
+        agent.save(model_path)
+        with open(stats_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+
         return {
             "status": "success",
             "path": model_path,
-            "message": "Model saved successfully"
+            "stats_path": stats_path,
+            "message": f"Model saved to {model_path}",
+            "summary": summary,
         }
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {
             "status": "error",
             "message": str(e),
-            "path": model_path
         }
 
 @app.post("/add-reward/")
@@ -1177,7 +1663,9 @@ async def add_reward(request: Request):
     
     if not bot_name:
         return {"status": "error", "message": "bot_name is required"}
-    
+
+    _mark_bot_active(bot_name)
+
     # Update bot state (use current_state from request, or merge with existing)
     if current_state:
         if bot_name not in bot_states:
@@ -1205,11 +1693,21 @@ async def add_reward(request: Request):
         if len(bot_reward_events[bot_name]) > MAX_REWARD_EVENTS_PER_BOT:
             bot_reward_events[bot_name] = bot_reward_events[bot_name][-MAX_REWARD_EVENTS_PER_BOT:]
     
+    # Suppress damage events during episode reset window (/kill creates phantom damage)
+    reset_deadline = _bot_reset_until.get(bot_name, 0)
+    if time.time() < reset_deadline:
+        events = [e for e in events if e.get("type") not in ("damage_taken", "damage_dealt")]
+        if not events:
+            return {"status": "suppressed", "bot_name": bot_name,
+                    "message": "damage events during reset window ignored"}
+
+    # Track damage_dealt events per episode for passive-play penalty
+    for ev in events:
+        if ev.get("type") == "damage_dealt":
+            bot_episode_damage_dealt[bot_name] = bot_episode_damage_dealt.get(bot_name, 0) + 1
+
     # Only add rewards to training buffer for bots running the RL model.
-    # Bots on other versions (e.g., 0.0 calibration) would contaminate the
-    # shared buffer since their reward events get attributed to whichever
-    # step was stored last (which belongs to a different bot).
-    bot_version = bot_model_mapping.get(bot_name, "0.0")
+    bot_version = bot_model_mapping.get(bot_name, "0.1")
     agent = fast_rl_agent if fast_rl_agent else ppo_agent
     if agent and events and bot_version == "0.1":
         state_to_use = current_state if current_state else bot_states.get(bot_name, {})
@@ -1298,7 +1796,7 @@ async def get_game_state():
             "status": bot.status,
             "pair": bot.pair.name if hasattr(bot, 'pair') and bot.pair != "NONE" else None,
             "arena": bot.arena.name if hasattr(bot, 'arena') and bot.arena else None,
-            "model_version": bot_model_mapping.get(bot.name, "0.0"),
+            "model_version": bot_model_mapping.get(bot.name, "0.1"),
             "tick_count": bot_tick_counts.get(bot.name, 0),
             "tick_rate": tick_rate
         }
@@ -1361,8 +1859,8 @@ async def get_stats():
         "dead_bots": len([b for b in botController.bots if b.status == "dead"]),
         "open_arenas": len([a for a in arenas if a.status == "open"]),
         "closed_arenas": len([a for a in arenas if a.status == "closed"]),
-        "rl_samples": len(fast_rl_agent.observations) if fast_rl_agent else (len(ppo_agent.observations) if ppo_agent else 0),
-        "rl_rewards": len(fast_rl_agent.rewards) if fast_rl_agent else (len(ppo_agent.rewards) if ppo_agent else 0),
+        "rl_samples": sum(len(b) for b in fast_rl_agent._buffers.values()) if fast_rl_agent else (len(ppo_agent.observations) if ppo_agent else 0),
+        "rl_rewards": sum(len(b.rewards) for b in fast_rl_agent._buffers.values()) if fast_rl_agent else (len(ppo_agent.rewards) if ppo_agent else 0),
         "last_loss": fast_rl_agent.last_loss if fast_rl_agent else 0.0,
         "last_score": fast_rl_agent.last_score if fast_rl_agent else 0.0
     }
@@ -1483,35 +1981,7 @@ async def get_reward_progression():
                                                     if event_type not in reward_types:
                                                         reward_types[event_type] = {'count': 0, 'amount': 0.0}
                                                     reward_types[event_type]['count'] += 1
-                                                    # Calculate reward amount (same logic as FastRLAgent.add_reward)
-                                                    amount = 0.0
-                                                    if event_type == 'damage_dealt':
-                                                        if 'damage_percentage' in event:
-                                                            amount = event.get('damage_percentage', 0) * 10.0
-                                                        else:
-                                                            amount = event.get('amount', 0) * 1.0
-                                                    elif event_type == 'damage_taken':
-                                                        amount = -event.get('amount', 0) * 0.5
-                                                    elif event_type == 'good_aim':
-                                                        amount = event.get('amount', 0.1)
-                                                    elif event_type == 'proximity':
-                                                        amount = event.get('amount', 0)
-                                                    elif event_type == 'survival':
-                                                        amount = event.get('amount', 0)
-                                                    elif event_type == 'yaw_exploration':
-                                                        amount = event.get('amount', 0)
-                                                    elif event_type == 'pitch_control':
-                                                        amount = event.get('amount', 0)
-                                                    elif event_type == 'extreme_pitch_penalty':
-                                                        amount = event.get('amount', -0.05)
-                                                    elif event_type == 'aim_hold':
-                                                        amount = event.get('amount', 0.2)
-                                                    elif event_type == 'won_duel':
-                                                        amount = 10.0
-                                                    elif event_type == 'death':
-                                                        amount = -1.0
-                                                    elif event_type == 'episode_timeout':
-                                                        amount = event.get('amount', -0.1)
+                                                    amount = _estimate_reward_amount(event_type, event)
                                                     reward_types[event_type]['amount'] += amount
                                         except (ValueError, TypeError) as e:
                                             continue

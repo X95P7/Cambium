@@ -297,10 +297,23 @@ backend/
 - [ ] Add visualization tools for training progress
 - [ ] Support custom observation/action space definitions via config files
 
+## Building
+
+The mod must be compiled with **JDK 8** and built using `gradlew build`:
+
+```bash
+./gradlew clean build        # Linux/Mac
+.\gradlew.bat clean build    # Windows
+```
+
+> **Do NOT use `gradlew jar` or `gradlew compileJava`**. Only `gradlew build` includes the reobfuscation step (`reobfJar`) that translates MCP names (e.g. `Blocks.bedrock`) to SRG names used by Forge at runtime. Without reobfuscation, the mod will crash with `NoSuchFieldError` on load.
+
+The output JAR is at `build/libs/CambiumMod-1.0.jar`. Copy it to `headlessmc/mods/` before building the Docker containers.
+
 ## Requirements
 
-- Minecraft 1.8.x (or version compatible with Forge)
-- Forge Mod Loader
+- **Java JDK 8** (JDK 11+ will not work — Forge 1.8.9 requires JDK 8)
+- Minecraft 1.8.9 with Forge
 - Python 3.8+ (for backend)
 - FastAPI
 - mcrcon (for RCON commands)

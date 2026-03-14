@@ -1,0 +1,103 @@
+---- Minecraft Crash Report ----
+// Quite honestly, I wouldn't worry myself about that.
+
+Time: 3/12/26 6:03 AM
+Description: Ticking entity
+
+java.util.ConcurrentModificationException
+	at java.util.ArrayList$Itr.checkForComodification(ArrayList.java:911)
+	at java.util.ArrayList$Itr.next(ArrayList.java:861)
+	at com.google.common.collect.Iterators$7.computeNext(Iterators.java:646)
+	at com.google.common.collect.AbstractIterator.tryToComputeNext(AbstractIterator.java:143)
+	at com.google.common.collect.AbstractIterator.hasNext(AbstractIterator.java:138)
+	at net.minecraft.world.chunk.Chunk.func_177430_a(Chunk.java:988)
+	at net.minecraft.world.World.func_175647_a(World.java:3030)
+	at net.minecraft.world.World.func_72872_a(World.java:3013)
+	at net.minecraft.entity.item.EntityItem.func_85054_d(EntityItem.java:157)
+	at net.minecraft.entity.item.EntityItem.func_70071_h_(EntityItem.java:113)
+	at net.minecraft.world.World.func_72866_a(World.java:1862)
+	at net.minecraft.world.WorldServer.func_72866_a(WorldServer.java:700)
+	at net.minecraft.world.World.func_72870_g(World.java:1831)
+	at net.minecraft.world.World.func_72939_s(World.java:1663)
+	at net.minecraft.world.WorldServer.func_72939_s(WorldServer.java:545)
+	at net.minecraft.server.MinecraftServer.func_71190_q(MinecraftServer.java:701)
+	at net.minecraft.server.dedicated.DedicatedServer.func_71190_q(DedicatedServer.java:344)
+	at net.minecraft.server.MinecraftServer.func_71217_p(MinecraftServer.java:605)
+	at net.minecraft.server.MinecraftServer.run(MinecraftServer.java:481)
+	at java.lang.Thread.run(Thread.java:748)
+
+
+A detailed walkthrough of the error, its code path and all known details is as follows:
+---------------------------------------------------------------------------------------
+
+-- Head --
+Stacktrace:
+	at java.util.ArrayList$Itr.checkForComodification(ArrayList.java:911)
+	at java.util.ArrayList$Itr.next(ArrayList.java:861)
+	at com.google.common.collect.Iterators$7.computeNext(Iterators.java:646)
+	at com.google.common.collect.AbstractIterator.tryToComputeNext(AbstractIterator.java:143)
+	at com.google.common.collect.AbstractIterator.hasNext(AbstractIterator.java:138)
+	at net.minecraft.world.chunk.Chunk.func_177430_a(Chunk.java:988)
+	at net.minecraft.world.World.func_175647_a(World.java:3030)
+	at net.minecraft.world.World.func_72872_a(World.java:3013)
+	at net.minecraft.entity.item.EntityItem.func_85054_d(EntityItem.java:157)
+	at net.minecraft.entity.item.EntityItem.func_70071_h_(EntityItem.java:113)
+	at net.minecraft.world.World.func_72866_a(World.java:1862)
+	at net.minecraft.world.WorldServer.func_72866_a(WorldServer.java:700)
+	at net.minecraft.world.World.func_72870_g(World.java:1831)
+
+-- Entity being ticked --
+Details:
+	Entity Type: Item (net.minecraft.entity.item.EntityItem)
+	Entity ID: 4764
+	Entity Name: item.item.swordIron
+	Entity's Exact location: -18.65, 15.32, 20.83
+	Entity's Block location: -19.00,15.00,20.00 - World: (-19,15,20), Chunk: (at 13,0,4 in -2,1; contains blocks -32,0,16 to -17,255,31), Region: (-1,0; contains chunks -32,0 to -1,31, blocks -512,0,0 to -1,255,511)
+	Entity's Momentum: 0.14, -0.00, -0.24
+	Entity's Rider: ~~ERROR~~ NullPointerException: null
+	Entity's Vehicle: ~~ERROR~~ NullPointerException: null
+Stacktrace:
+	at net.minecraft.world.World.func_72939_s(World.java:1663)
+	at net.minecraft.world.WorldServer.func_72939_s(WorldServer.java:545)
+
+-- Affected level --
+Details:
+	Level name: world
+	All players: 3 total; [EntityPlayerMP['Xylim'/2, l='world', x=-83.57, y=79.10, z=42.77], EntityPlayerMP['Bot1'/3488, l='world', x=-18.01, y=14.00, z=26.34], EntityPlayerMP['Bot2'/3487, l='world', x=-18.79, y=14.00, z=21.07]]
+	Chunk stats: ServerChunkCache: 543 Drop: 0
+	Level seed: -4755800436140772926
+	Level generator: ID 01 - flat, ver 0. Features enabled: false
+	Level generator options: 3;2*minecraft:air;1;village
+	Level spawn location: 7.00,21.00,-6.00 - World: (7,21,-6), Chunk: (at 7,1,10 in 0,-1; contains blocks 0,0,-16 to 15,255,-1), Region: (0,-1; contains chunks 0,-32 to 31,-1, blocks 0,0,-512 to 511,255,-1)
+	Level time: 8076907 game time, 26513 day time
+	Level dimension: 0
+	Level storage version: 0x04ABD - Anvil
+	Level weather: Rain time: 1 (now: false), thunder time: 1 (now: false)
+	Level game mode: Game mode: survival (ID 0). Hardcore: false. Cheats: true
+Stacktrace:
+	at net.minecraft.server.MinecraftServer.func_71190_q(MinecraftServer.java:701)
+	at net.minecraft.server.dedicated.DedicatedServer.func_71190_q(DedicatedServer.java:344)
+	at net.minecraft.server.MinecraftServer.func_71217_p(MinecraftServer.java:605)
+	at net.minecraft.server.MinecraftServer.run(MinecraftServer.java:481)
+	at java.lang.Thread.run(Thread.java:748)
+
+-- System Details --
+Details:
+	Minecraft Version: 1.8.9
+	Operating System: Linux (amd64) version 6.6.87.2-microsoft-standard-WSL2
+	Java Version: 1.8.0_312, Temurin
+	Java VM Version: OpenJDK 64-Bit Server VM (mixed mode), Temurin
+	Memory: 6103111032 bytes (5820 MB) / 8527544320 bytes (8132 MB) up to 8527544320 bytes (8132 MB)
+	JVM Flags: 2 total; -Xmx8G -Xms8G
+	IntCache: cache: 0, tcache: 0, allocated: 0, tallocated: 0
+	FML: MCP 9.19 Powered by Forge 11.15.1.2318 4 mods loaded, 4 mods active
+	States: 'U' = Unloaded 'L' = Loaded 'C' = Constructed 'H' = Pre-initialized 'I' = Initialized 'J' = Post-initialized 'A' = Available 'D' = Disabled 'E' = Errored
+	UCHIJAAAA	mcp{9.19} [Minecraft Coder Pack] (minecraft.jar) 
+	UCHIJAAAA	FML{8.0.99.99} [Forge Mod Loader] (forge-1.8.9-11.15.1.2318-1.8.9-universal.jar) 
+	UCHIJAAAA	Forge{11.15.1.2318} [Minecraft Forge] (forge-1.8.9-11.15.1.2318-1.8.9-universal.jar) 
+	UCHIJAAAA	tickfreeze{1.0} [tickfreeze] (modid-1.0.jar) 
+	Loaded coremods (and transformers): 
+	Profiler Position: N/A (disabled)
+	Player Count: 3 / 20; [EntityPlayerMP['Xylim'/2, l='world', x=-83.57, y=79.10, z=42.77], EntityPlayerMP['Bot1'/3488, l='world', x=-18.01, y=14.00, z=26.34], EntityPlayerMP['Bot2'/3487, l='world', x=-18.79, y=14.00, z=21.07]]
+	Is Modded: Definitely; Server brand changed to 'fml,forge'
+	Type: Dedicated Server (map_server.txt)

@@ -25,8 +25,11 @@ services:
       - ENV=production
     depends_on:
       - mc-forge
+    restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/v
+      - ./backend/models:/app/models
+      - ./backend/logs:/app/logs
     deploy:
       resources:
         limits:

@@ -1,416 +1,563 @@
 """
-Fast RL Model - Multi-Discrete Action Space
-Uses separate heads for each action component for better exploration
+Fast RL Model - PPO with Multi-Discrete Action Space
+Actor-critic architecture with separate heads for each action component.
+Uses clipped surrogate objective, GAE advantages, and minibatch updates.
 """
 import torch
 import torch.nn as nn
 import numpy as np
 from typing import Dict, List, Tuple
 
-# Predefined discrete bins for look deltas (degrees per tick).
-# Each bin is a distinct, meaningful angular velocity choice.
-# At 20 TPS: ±20°/tick = 400°/s (fast spin), ±2°/tick = 40°/s (fine aim).
 YAW_BINS = [-20.0, -10.0, -5.0, -2.0, 0.0, 2.0, 5.0, 10.0, 20.0]
 PITCH_BINS = [-5.0, -2.0, 0.0, 2.0, 5.0]
 
-class MultiDiscretePolicy(nn.Module):
+
+class ActorCritic(nn.Module):
     """
-    Multi-discrete policy with separate heads for each action component.
-    Total outputs: 8 (movement) + 2 (jump) + 2 (attack) + 9 (yaw) + 5 (pitch) = 26
+    Actor-critic network with shared feature extractor.
+    Actor: multi-discrete policy heads (movement, jump, attack, yaw, pitch)
+    Critic: single scalar value estimate V(s)
     """
     def __init__(self, observation_dim: int, hidden_dim: int = 256):
-        super(MultiDiscretePolicy, self).__init__()
-        
-        # Shared feature extractor
+        super(ActorCritic, self).__init__()
+
         self.shared = nn.Sequential(
             nn.Linear(observation_dim, hidden_dim),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU()
+            nn.Tanh()
         )
-        
-        # Separate output heads for each action component
-        self.movement_head = nn.Linear(hidden_dim, 8)                # 8 movement directions
-        self.jump_head = nn.Linear(hidden_dim, 2)                    # jump yes/no
-        self.attack_head = nn.Linear(hidden_dim, 2)                  # attack yes/no
-        self.yaw_head = nn.Linear(hidden_dim, len(YAW_BINS))        # discrete yaw deltas
-        self.pitch_head = nn.Linear(hidden_dim, len(PITCH_BINS))     # discrete pitch deltas
-        
-        # Bias pitch toward "no change" (center bin) so pitch doesn't drift
-        # during early training while the model learns yaw tracking first.
-        # PITCH_BINS = [-5, -2, 0, 2, 5], center index = 2
+
+        # Actor heads
+        self.movement_head = nn.Linear(hidden_dim, 8)
+        self.jump_head = nn.Linear(hidden_dim, 2)
+        self.attack_head = nn.Linear(hidden_dim, 2)
+        self.yaw_head = nn.Linear(hidden_dim, len(YAW_BINS))
+        self.pitch_head = nn.Linear(hidden_dim, len(PITCH_BINS))
+
+        # Critic head
+        self.value_head = nn.Linear(hidden_dim, 1)
+
+        # Bias pitch toward center so it doesn't drift early on
         with torch.no_grad():
             center = len(PITCH_BINS) // 2
             self.pitch_head.bias.zero_()
             self.pitch_head.bias[center] = 2.0
-    
-    def forward(self, observation: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Returns dict of logits for each action component"""
-        features = self.shared(observation)
-        
-        return {
+
+        # Orthogonal init for better PPO convergence
+        for module in [self.movement_head, self.jump_head, self.attack_head,
+                       self.yaw_head, self.pitch_head]:
+            nn.init.orthogonal_(module.weight, gain=0.01)
+            nn.init.zeros_(module.bias)
+        nn.init.orthogonal_(self.value_head.weight, gain=1.0)
+        nn.init.zeros_(self.value_head.bias)
+        # Re-apply pitch center bias after orthogonal init
+        with torch.no_grad():
+            self.pitch_head.bias[center] = 2.0
+            self.jump_head.bias[0] = 2.0   # bias toward "don't jump"
+
+    def forward(self, obs: torch.Tensor) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+        """Returns (logits_dict, value)"""
+        features = self.shared(obs)
+        logits = {
             'movement': self.movement_head(features),
             'jump': self.jump_head(features),
             'attack': self.attack_head(features),
             'yaw': self.yaw_head(features),
-            'pitch': self.pitch_head(features)
+            'pitch': self.pitch_head(features),
         }
-    
-    def get_action(self, observation: np.ndarray, deterministic: bool = False) -> Tuple[Dict[str, int], float]:
-        """Sample action from policy, returns (action_dict, total_log_prob)"""
+        value = self.value_head(features).squeeze(-1)
+        return logits, value
+
+    def get_action_and_value(self, obs_np: np.ndarray, deterministic: bool = False):
+        """Sample action, return (actions_dict, log_prob, value) — all scalars."""
         with torch.no_grad():
-            observation_tensor = torch.FloatTensor(observation).unsqueeze(0)
-            logits_dict = self.forward(observation_tensor)
-            
+            obs_t = torch.FloatTensor(obs_np).unsqueeze(0)
+            logits, value = self.forward(obs_t)
+
             actions = {}
             log_probs = []
-            
-            # Sample from each head independently
-            for key, logits in logits_dict.items():
-                probs = torch.softmax(logits, dim=-1)
-                dist = torch.distributions.Categorical(probs)
-                
-                if deterministic:
-                    action = torch.argmax(probs, dim=-1).item()
-                else:
-                    action = dist.sample().item()
-                
-                actions[key] = action
-                log_probs.append(dist.log_prob(torch.tensor(action)))
-            
-            # Total log prob is sum (actions are independent)
-            total_log_prob = sum(log_probs).item()
-            
-            return actions, total_log_prob
+            for key, lg in logits.items():
+                dist = torch.distributions.Categorical(logits=lg)
+                a = torch.argmax(lg, dim=-1).item() if deterministic else dist.sample().item()
+                actions[key] = a
+                log_probs.append(dist.log_prob(torch.tensor(a)))
+
+            total_lp = sum(log_probs).item()
+            return actions, total_lp, value.item()
+
+    def evaluate_actions(self, obs_t: torch.Tensor,
+                         act_movement: torch.Tensor, act_jump: torch.Tensor,
+                         act_attack: torch.Tensor, act_yaw: torch.Tensor,
+                         act_pitch: torch.Tensor):
+        """
+        Given a batch of observations and actions, return
+        (log_probs, values, entropy)  — all batched tensors.
+        """
+        logits, values = self.forward(obs_t)
+
+        dists = {k: torch.distributions.Categorical(logits=v) for k, v in logits.items()}
+
+        lp = (dists['movement'].log_prob(act_movement)
+              + dists['jump'].log_prob(act_jump)
+              + dists['attack'].log_prob(act_attack)
+              + dists['yaw'].log_prob(act_yaw)
+              + dists['pitch'].log_prob(act_pitch))
+
+        ent = sum(d.entropy() for d in dists.values())
+
+        return lp, values, ent
+
+
+class _BotBuffer:
+    """Per-bot rollout buffer — keeps one bot's trajectory separate."""
+    __slots__ = ('observations', 'actions', 'log_probs', 'values', 'rewards',
+                 'reward_types', 'dones')
+
+    def __init__(self):
+        self.observations: List[np.ndarray] = []
+        self.actions: List[Dict[str, int]] = []
+        self.log_probs: List[float] = []
+        self.values: List[float] = []
+        self.rewards: List[float] = []
+        self.reward_types: List[Dict] = []
+        self.dones: List[bool] = []
+
+    def __len__(self):
+        return len(self.observations)
+
+    def clear(self):
+        for attr in self.__slots__:
+            getattr(self, attr).clear()
 
 
 class FastRLAgent:
-    """Fast RL Agent with multi-discrete action space and reward-to-go"""
-    
+    """PPO agent with multi-discrete actions, GAE, and clipped surrogate."""
+
+    # PPO hyperparameters
+    GAMMA = 0.99
+    GAE_LAMBDA = 0.95
+    CLIP_EPS = 0.2
+    VF_COEF = 0.5
+    ENT_COEF = 0.02
+    MAX_GRAD_NORM = 0.5
+    LR = 3e-4
+    PPO_EPOCHS = 4
+    MINIBATCH_SIZE = 64
+
     def __init__(self, observation_dim: int, device: str = 'cpu', hidden_dim: int = 256):
         self.observation_dim = observation_dim
         self.device = device
-        self.policy = MultiDiscretePolicy(observation_dim, hidden_dim=hidden_dim).to(device)
-        self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=3e-4)
-        
-        # Training buffers
-        self.observations = []
-        self.actions = []  # Now stores dicts instead of indices
-        self.rewards = []
-        self.reward_types = []  # Track reward types per sample: list of dicts {type: {'count': int, 'amount': float}}
-        self.dones = []
-        
-        # Metrics
-        self.bot_scores = {}
-        self.bot_losses = {}
+        self.net = ActorCritic(observation_dim, hidden_dim).to(device)
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=self.LR, eps=1e-5)
+
+        # Per-bot rollout buffers (keyed by bot_name)
+        self._buffers: Dict[str, _BotBuffer] = {}
+
+        # Legacy flat accessors used by main.py for len checks / reward_types
+        self.observations: List[np.ndarray] = []
+        self.reward_types: List[Dict] = []
+
+        # Metrics (same interface as before)
+        self.bot_scores: Dict[str, float] = {}
+        self.bot_losses: Dict[str, float] = {}
         self.last_loss = 0.0
         self.last_score = 0.0
-        
-        # Pre-allocate observation vector size
-        # Player: 7, Entities: 10*6=60, Blocks: 20*5=100, Inventory: 9*3=27 = 194
+
         self.obs_vector_size = 194
 
+        # Keep reference to policy for compatibility with main.py obs caching
+        self.policy = self.net
+
+    def _buf(self, bot_name: str) -> '_BotBuffer':
+        if bot_name not in self._buffers:
+            self._buffers[bot_name] = _BotBuffer()
+        return self._buffers[bot_name]
+
+    # ------------------------------------------------------------------
+    # Observation vectorisation (unchanged)
+    # ------------------------------------------------------------------
     def _observation_to_vector_fast(self, observation: Dict, action_space: Dict) -> np.ndarray:
-        """Optimized observation vectorization using pre-allocated numpy array"""
         vector = np.zeros(self.obs_vector_size, dtype=np.float32)
         idx = 0
-        
-        # Player data (7 features)
+
         if 'player' in observation:
-            player = observation['player']
-            vector[idx] = player.get('health', 0) / 20.0
-            vector[idx+1] = player.get('x', 0) / 100.0
-            vector[idx+2] = player.get('y', 0) / 100.0
-            vector[idx+3] = player.get('z', 0) / 100.0
-            vector[idx+4] = player.get('yaw', 0) / 180.0
-            vector[idx+5] = player.get('pitch', 0) / 90.0
-            vector[idx+6] = player.get('armor', 0) / 20.0
+            p = observation['player']
+            vector[idx]   = p.get('health', 0) / 20.0
+            vector[idx+1] = p.get('x', 0) / 100.0
+            vector[idx+2] = p.get('y', 0) / 100.0
+            vector[idx+3] = p.get('z', 0) / 100.0
+            vector[idx+4] = p.get('yaw', 0) / 180.0
+            vector[idx+5] = p.get('pitch', 0) / 90.0
+            vector[idx+6] = p.get('armor', 0) / 20.0
             idx += 7
-        
-        # Entities (10 entities × 6 features = 60)
+
         if 'entities' in observation:
-            entities = observation['entities'][:10]
-            for i, entity in enumerate(entities):
-                base_idx = idx + (i * 6)
-                vector[base_idx] = 1.0 if entity.get('isPlayer', False) else 0.0
-                vector[base_idx+1] = 1.0 if entity.get('isProjectile', False) else 0.0
-                vector[base_idx+2] = entity.get('health', 0) / 20.0
-                vector[base_idx+3] = entity.get('relativeX', 0) / 10.0
-                vector[base_idx+4] = entity.get('relativeY', 0) / 10.0
-                vector[base_idx+5] = entity.get('relativeZ', 0) / 10.0
-            idx += 60
-        else:
-            idx += 60
-        
-        # Blocks (20 blocks × 5 features = 100)
+            for i, e in enumerate(observation['entities'][:10]):
+                bi = idx + i * 6
+                vector[bi]   = 1.0 if e.get('isPlayer', False) else 0.0
+                vector[bi+1] = 1.0 if e.get('isProjectile', False) else 0.0
+                vector[bi+2] = e.get('health', 0) / 20.0
+                vector[bi+3] = e.get('relativeX', 0) / 10.0
+                vector[bi+4] = e.get('relativeY', 0) / 10.0
+                vector[bi+5] = e.get('relativeZ', 0) / 10.0
+        idx += 60
+
         if 'blocks' in observation:
-            blocks = observation['blocks'][:20]
-            for i, block in enumerate(blocks):
-                base_idx = idx + (i * 5)
-                vector[base_idx] = block.get('x', 0) / 20.0
-                vector[base_idx+1] = block.get('y', 0) / 20.0
-                vector[base_idx+2] = block.get('z', 0) / 20.0
-                vector[base_idx+3] = block.get('distance', 0) / 20.0
-                vector[base_idx+4] = 1.0 if block.get('solid', False) else 0.0
-            idx += 100
-        else:
-            idx += 100
-        
-        # Inventory (9 slots × 3 features = 27)
+            for i, b in enumerate(observation['blocks'][:20]):
+                bi = idx + i * 5
+                vector[bi]   = b.get('x', 0) / 20.0
+                vector[bi+1] = b.get('y', 0) / 20.0
+                vector[bi+2] = b.get('z', 0) / 20.0
+                vector[bi+3] = b.get('distance', 0) / 20.0
+                vector[bi+4] = 1.0 if b.get('solid', False) else 0.0
+        idx += 100
+
         if 'inventory' in observation:
-            inventory = observation['inventory'][:9]
-            for i, inv in enumerate(inventory):
-                base_idx = idx + (i * 3)
-                vector[base_idx] = inv.get('count', 0) / 64.0
-                vector[base_idx+1] = 1.0 if inv.get('isWeapon', False) else 0.0
-                vector[base_idx+2] = inv.get('weaponDamage', 0) / 10.0
-            idx += 27
-        else:
-            idx += 27
-        
+            for i, inv in enumerate(observation['inventory'][:9]):
+                bi = idx + i * 3
+                vector[bi]   = inv.get('count', 0) / 64.0
+                vector[bi+1] = 1.0 if inv.get('isWeapon', False) else 0.0
+                vector[bi+2] = inv.get('weaponDamage', 0) / 10.0
+        idx += 27
+
         return vector
 
-    def _actions_dict_to_minecraft(self, actions_dict: Dict[str, int], action_space: Dict) -> Dict:
-        """Convert action dict from policy to Minecraft action format"""
-        yaw = float(YAW_BINS[actions_dict['yaw']])
-        pitch = float(PITCH_BINS[actions_dict['pitch']])
-        
+    def _actions_dict_to_minecraft(self, ad: Dict[str, int], action_space: Dict) -> Dict:
         return {
-            "movement": int(actions_dict['movement']),
-            "jump": bool(actions_dict['jump']),
+            "movement": int(ad['movement']),
+            "jump": False,  # disabled: no reward signal for jump, and airborne = worse aim
             "sneak": False,
             "sprint": False,
-            "attack": bool(actions_dict['attack']),
+            "attack": bool(ad['attack']),
             "useItem": False,
             "hotbar": -1,
-            "yaw": yaw,
-            "pitch": pitch
+            "yaw": float(YAW_BINS[ad['yaw']]),
+            "pitch": float(PITCH_BINS[ad['pitch']]),
         }
 
-    def predict_action(self, observation: Dict, action_space: Dict, cached_vector: np.ndarray = None) -> Dict:
-        """Fast prediction - returns Minecraft-formatted action"""
-        if cached_vector is not None:
-            obs_vector = cached_vector
-        else:
-            obs_vector = self._observation_to_vector_fast(observation, action_space)
-        
-        # Get action from policy (returns dict with component indices)
-        actions_dict, _ = self.policy.get_action(obs_vector, deterministic=False)
-        
-        # Convert to Minecraft format
-        minecraft_action = self._actions_dict_to_minecraft(actions_dict, action_space)
-        
-        # Store for training (all buffers must stay in sync)
-        self.observations.append(obs_vector)
-        self.actions.append(actions_dict)
-        self.rewards.append(0.0)
-        self.reward_types.append({})
-        self.dones.append(False)
-        
-        return minecraft_action
+    # ------------------------------------------------------------------
+    # predict_action  (same signature as before, now bot-name aware)
+    # ------------------------------------------------------------------
+    def predict_action(self, observation: Dict, action_space: Dict,
+                       cached_vector: np.ndarray = None,
+                       bot_name: str = "default") -> Dict:
+        obs_vec = cached_vector if cached_vector is not None else \
+            self._observation_to_vector_fast(observation, action_space)
+
+        actions_dict, lp, val = self.net.get_action_and_value(obs_vec)
+        mc_action = self._actions_dict_to_minecraft(actions_dict, action_space)
+
+        buf = self._buf(bot_name)
+        buf.observations.append(obs_vec)
+        buf.actions.append(actions_dict)
+        buf.log_probs.append(lp)
+        buf.values.append(val)
+        buf.rewards.append(0.0)
+        buf.reward_types.append({})
+        buf.dones.append(False)
+
+        # Update flat accessors so main.py len checks still work
+        self.observations = buf.observations
+        self.reward_types = buf.reward_types
+
+        return mc_action
+
+    # ------------------------------------------------------------------
+    # add_reward / add_done  (per-bot buffer aware)
+    # ------------------------------------------------------------------
+    def _compute_reward(self, ev: Dict) -> Tuple[str, float]:
+        """Convert event to (type, reward_amount).
+
+        Reward budget for a typical 15s episode (~105 ticks per bot):
+            GOAL REWARDS  (sparse, strongly dominate learning signal)
+              won_duel        +15.0   (the whole point)
+              damage_dealt    dmg% × 10.0  (~2 hits → ~6.0 total)
+              death           -2.0    (mild — dying is bad but shouldn't discourage fighting)
+              episode_timeout -1.0    (couldn't finish = punishment, encourages aggression)
+              damage_taken    -amt × 0.1   (~2 hits → ~-0.6 total, nearly free)
+              no_damage_penalty -0.5  (no hits landed = passive play punished)
+            SHAPING REWARDS  (frequent, kept small so they guide not override)
+              good_aim        mod_score × 0.03  (~40 events → ~0.6 total)
+              aim_hold        from event amt × 0.6  (~30 ticks → ~0.9)
+              proximity       from event amt × 0.5  (~105 × 0.005 → ~0.5)
+              pitch_control   from event amt × 0.5  (~105 × 0.01 → ~1.0)
+              extreme_pitch   -0.03              (rare, only >60°)
+        """
+        et = ev.get('type', '')
+        amt = 0.0
+        if et == 'damage_dealt':
+            amt = ev.get('damage_percentage', 0) * 10.0 if 'damage_percentage' in ev else ev.get('amount', 0) * 1.0
+        elif et == 'damage_taken':
+            amt = -ev.get('amount', 0) * 0.1
+        elif et == 'good_aim':
+            amt = ev.get('amount', 0.1) * 0.03
+        elif et == 'proximity':
+            amt = ev.get('amount', 0) * 0.5
+        elif et == 'pitch_control':
+            amt = ev.get('amount', 0) * 0.5
+        elif et == 'extreme_pitch_penalty':
+            amt = ev.get('amount', -0.03)
+        elif et == 'aim_hold':
+            amt = ev.get('amount', 0.05) * 0.6
+        elif et == 'won_duel':
+            amt = 15.0
+        elif et == 'death':
+            amt = -2.0
+        elif et == 'episode_timeout':
+            amt = -1.0
+        elif et == 'no_damage_penalty':
+            amt = -0.5
+        elif et == 'survival':
+            amt = 0.0
+        elif et == 'yaw_exploration':
+            amt = 0.0
+        return et, amt
 
     def add_reward(self, bot_name: str, current_state: Dict, events: List[Dict]):
-        """Add reward for training - updates the last reward entry"""
+        buf = self._buf(bot_name)
         total_reward = 0.0
-        reward_type_data = {}  # Track both count and amount per type: {type: {'count': int, 'amount': float}}
-        
-        for event in events:
-            event_type = event.get('type', '')
-            reward_amount = 0.0
-            
-            if event_type == 'damage_dealt':
-                if 'damage_percentage' in event:
-                    reward_amount = event.get('damage_percentage', 0) * 10.0
-                else:
-                    reward_amount = event.get('amount', 0) * 1.0
-            elif event_type == 'damage_taken':
-                reward_amount = -event.get('amount', 0) * 0.5
-            elif event_type == 'good_aim':
-                reward_amount = event.get('amount', 0.1)
-            elif event_type == 'proximity':
-                reward_amount = event.get('amount', 0)
-            elif event_type == 'survival':
-                reward_amount = event.get('amount', 0)
-            elif event_type == 'yaw_exploration':
-                reward_amount = event.get('amount', 0)
-            elif event_type == 'pitch_control':
-                reward_amount = event.get('amount', 0)
-            elif event_type == 'extreme_pitch_penalty':
-                reward_amount = event.get('amount', -0.05)
-            elif event_type == 'aim_hold':
-                reward_amount = event.get('amount', 0.2)
-            elif event_type == 'won_duel':
-                reward_amount = 10.0
-            elif event_type == 'death':
-                reward_amount = -1.0
-            elif event_type == 'episode_timeout':
-                reward_amount = event.get('amount', -0.1)
-            
-            if event_type:  # Only track if event has a type
-                # Track both count and amount
-                if event_type not in reward_type_data:
-                    reward_type_data[event_type] = {'count': 0, 'amount': 0.0}
-                reward_type_data[event_type]['count'] += 1
-                reward_type_data[event_type]['amount'] += reward_amount
-                total_reward += reward_amount
-        
-        # Update the last reward entry
-        # Only update if we have observations/actions to match
-        # This prevents adding rewards when there are no corresponding actions
-        if len(self.observations) == 0:
-            # No observations yet, skip reward (will be added when action is predicted)
+        rt_data: Dict[str, Dict] = {}
+
+        for ev in events:
+            et, amt = self._compute_reward(ev)
+            if et:
+                if et not in rt_data:
+                    rt_data[et] = {'count': 0, 'amount': 0.0}
+                rt_data[et]['count'] += 1
+                rt_data[et]['amount'] += amt
+                total_reward += amt
+
+        if len(buf.observations) == 0:
             return
-        
-        # Ensure rewards list matches observations length
-        while len(self.rewards) < len(self.observations):
-            self.rewards.append(0.0)
-            self.reward_types.append({})  # Initialize empty reward type dict
-        
-        # Update the last reward entry (should now exist)
-        if len(self.rewards) > 0:
-            self.rewards[-1] += total_reward
-            # Merge reward type data into last entry (both counts and amounts)
-            for reward_type, data in reward_type_data.items():
-                if reward_type not in self.reward_types[-1]:
-                    self.reward_types[-1][reward_type] = {'count': 0, 'amount': 0.0}
-                self.reward_types[-1][reward_type]['count'] += data['count']
-                self.reward_types[-1][reward_type]['amount'] += data['amount']
-        
+
+        while len(buf.rewards) < len(buf.observations):
+            buf.rewards.append(0.0)
+            buf.reward_types.append({})
+
+        if buf.rewards:
+            buf.rewards[-1] += total_reward
+            for rtype, data in rt_data.items():
+                if rtype not in buf.reward_types[-1]:
+                    buf.reward_types[-1][rtype] = {'count': 0, 'amount': 0.0}
+                buf.reward_types[-1][rtype]['count'] += data['count']
+                buf.reward_types[-1][rtype]['amount'] += data['amount']
+
         self.bot_scores[bot_name] = self.bot_scores.get(bot_name, 0.0) + total_reward
+        # Update flat accessor
+        self.reward_types = buf.reward_types
 
-    def add_done(self, done: bool):
-        """Mark the most recent step as an episode boundary"""
-        if self.dones and done:
-            self.dones[-1] = True
+    def add_done(self, bot_name: str, done: bool):
+        """Mark the end of an episode for a specific bot."""
+        buf = self._buf(bot_name)
+        if buf.dones and done:
+            buf.dones[-1] = True
 
-    def train(self, batch_size: int = 64, epochs: int = 1) -> Dict:
-        """Policy gradient training with reward-to-go and multi-discrete actions"""
-        if len(self.observations) < batch_size:
-            return {"status": "insufficient_data", "buffer_size": len(self.observations)}
-        
-        # Ensure all buffers have the same length
-        min_len = min(len(self.observations), len(self.actions), len(self.rewards),
-                      len(self.reward_types), len(self.dones))
-        self.observations = self.observations[:min_len]
-        self.actions = self.actions[:min_len]
-        self.rewards = self.rewards[:min_len]
-        self.reward_types = self.reward_types[:min_len]
-        self.dones = self.dones[:min_len]
-        
-        obs_tensor = torch.FloatTensor(np.array(self.observations)).to(self.device)
-        
-        actions_movement = torch.LongTensor([a['movement'] for a in self.actions]).to(self.device)
-        actions_jump = torch.LongTensor([a['jump'] for a in self.actions]).to(self.device)
-        actions_attack = torch.LongTensor([a['attack'] for a in self.actions]).to(self.device)
-        actions_yaw = torch.LongTensor([a['yaw'] for a in self.actions]).to(self.device)
-        actions_pitch = torch.LongTensor([a['pitch'] for a in self.actions]).to(self.device)
-        
-        # Reward-to-go with episode boundary resets
-        returns = []
-        R = 0
-        gamma = 0.99
-        for i in range(len(self.rewards) - 1, -1, -1):
-            if self.dones[i]:
-                R = 0
-            R = self.rewards[i] + gamma * R
-            returns.insert(0, R)
-        
-        returns_tensor = torch.FloatTensor(returns).to(self.device)
-        
-        # Normalize returns (reduces variance)
-        if len(returns_tensor) > 1:
-            returns_normalized = (returns_tensor - returns_tensor.mean()) / (returns_tensor.std() + 1e-8)
-        else:
-            # If only one sample, can't normalize - use zero-centered
-            returns_normalized = returns_tensor - returns_tensor.mean()
-        
-        self.optimizer.zero_grad()
-        
-        # Forward pass - get logits for all action components
-        logits_dict = self.policy(obs_tensor)
-        
-        # Create distributions for each action component
-        movement_dist = torch.distributions.Categorical(logits=logits_dict['movement'])
-        jump_dist = torch.distributions.Categorical(logits=logits_dict['jump'])
-        attack_dist = torch.distributions.Categorical(logits=logits_dict['attack'])
-        yaw_dist = torch.distributions.Categorical(logits=logits_dict['yaw'])
-        pitch_dist = torch.distributions.Categorical(logits=logits_dict['pitch'])
-        
-        # Calculate log probabilities for the actions that were taken
-        log_prob_movement = movement_dist.log_prob(actions_movement)
-        log_prob_jump = jump_dist.log_prob(actions_jump)
-        log_prob_attack = attack_dist.log_prob(actions_attack)
-        log_prob_yaw = yaw_dist.log_prob(actions_yaw)
-        log_prob_pitch = pitch_dist.log_prob(actions_pitch)
-        
-        # Total log prob (sum because actions are independent)
-        total_log_prob = log_prob_movement + log_prob_jump + log_prob_attack + log_prob_yaw + log_prob_pitch
-        
-        # Ensure both tensors are 1D and have the same shape
-        total_log_prob = total_log_prob.squeeze()
-        returns_normalized = returns_normalized.squeeze()
-        
-        # Verify shapes match
-        if total_log_prob.dim() != 1 or returns_normalized.dim() != 1:
-            raise ValueError(f"Expected 1D tensors: total_log_prob.dim()={total_log_prob.dim()}, returns_normalized.dim()={returns_normalized.dim()}")
-        
-        if total_log_prob.shape[0] != returns_normalized.shape[0]:
-            raise ValueError(f"Shape mismatch: total_log_prob.shape={total_log_prob.shape}, returns_normalized.shape={returns_normalized.shape}, "
-                           f"obs_tensor.shape={obs_tensor.shape}, len(actions)={len(self.actions)}, len(rewards)={len(self.rewards)}")
-        
-        # Policy gradient loss: maximize log_prob * return
-        policy_loss = -(total_log_prob * returns_normalized).mean()
-        
-        # Entropy bonus for exploration (sum entropy of all heads)
-        entropy = (movement_dist.entropy() + jump_dist.entropy() + 
-                   attack_dist.entropy() + yaw_dist.entropy() + 
-                   pitch_dist.entropy()).mean()
-        
-        entropy_bonus = 0.02  # Increased from 0.01 to prevent premature convergence to degenerate policies
-        entropy_loss = -entropy_bonus * entropy
-        
-        # Total loss
-        loss = policy_loss + entropy_loss
-        
-        loss.backward()
-        
-        # Clip gradients
-        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.0)
-        
-        self.optimizer.step()
-        
-        self.last_loss = loss.item()
-        self.last_score = returns_tensor.sum().item()
-        
-        # Log training stats
-        print(f"Training stats: loss={loss.item():.6f}, policy_loss={policy_loss.item():.6f}, "
-              f"entropy={entropy.item():.4f}, return_mean={returns_tensor.mean().item():.4f}, "
-              f"return_std={returns_tensor.std().item():.4f}, "
-              f"min_return={returns_tensor.min().item():.4f}, max_return={returns_tensor.max().item():.4f}")
-        
-        # Clear buffers
-        self.observations.clear()
-        self.actions.clear()
-        self.rewards.clear()
-        self.reward_types.clear()
-        self.dones.clear()
-        
+    # ------------------------------------------------------------------
+    # train()  — PPO with per-bot GAE then merged minibatch updates
+    # ------------------------------------------------------------------
+    def _gae_for_buffer(self, buf: '_BotBuffer') -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor,
+                                                           torch.Tensor, torch.Tensor, torch.Tensor,
+                                                           torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Compute GAE advantages for a single bot's contiguous trajectory."""
+        N = len(buf.observations)
+        min_len = min(N, len(buf.actions), len(buf.rewards),
+                      len(buf.dones), len(buf.log_probs), len(buf.values))
+        if min_len == 0:
+            return (None,) * 9
+
+        obs_np      = np.array(buf.observations[:min_len])
+        obs_t       = torch.FloatTensor(obs_np).to(self.device)
+        act_mov     = torch.LongTensor([a['movement'] for a in buf.actions[:min_len]]).to(self.device)
+        act_jmp     = torch.LongTensor([a['jump']     for a in buf.actions[:min_len]]).to(self.device)
+        act_atk     = torch.LongTensor([a['attack']   for a in buf.actions[:min_len]]).to(self.device)
+        act_yaw     = torch.LongTensor([a['yaw']      for a in buf.actions[:min_len]]).to(self.device)
+        act_pitch   = torch.LongTensor([a['pitch']    for a in buf.actions[:min_len]]).to(self.device)
+        old_lp      = torch.FloatTensor(buf.log_probs[:min_len]).to(self.device)
+        values_t    = torch.FloatTensor(buf.values[:min_len]).to(self.device)
+        rewards_t   = torch.FloatTensor(buf.rewards[:min_len]).to(self.device)
+        dones       = buf.dones[:min_len]
+
+        with torch.no_grad():
+            last_obs = torch.FloatTensor(buf.observations[min_len - 1]).unsqueeze(0).to(self.device)
+            _, next_value = self.net(last_obs)
+            next_value = next_value.squeeze()
+            if dones[-1]:
+                next_value = torch.tensor(0.0).to(self.device)
+
+            advantages = torch.zeros(min_len).to(self.device)
+            gae = 0.0
+            for t in reversed(range(min_len)):
+                if t == min_len - 1:
+                    next_val = next_value
+                else:
+                    next_val = values_t[t + 1]
+                    if dones[t]:
+                        next_val = torch.tensor(0.0).to(self.device)
+                delta = rewards_t[t] + self.GAMMA * next_val - values_t[t]
+                mask = 0.0 if dones[t] else 1.0
+                gae = delta + self.GAMMA * self.GAE_LAMBDA * mask * gae
+                advantages[t] = gae
+
+            returns_t = advantages + values_t
+
+        return (obs_t, act_mov, act_jmp, act_atk, act_yaw, act_pitch,
+                old_lp, advantages, returns_t)
+
+    def train(self, batch_size: int = 64, epochs: int = 4) -> Dict:
+        # Merge per-bot buffers after computing GAE independently per bot
+        all_obs, all_mov, all_jmp, all_atk, all_yaw, all_pitch = [], [], [], [], [], []
+        all_old_lp, all_adv, all_ret = [], [], []
+        total_rewards_sum = 0.0
+
+        for bot_name, buf in self._buffers.items():
+            if len(buf) == 0:
+                continue
+            total_rewards_sum += sum(buf.rewards[:len(buf)])
+            result = self._gae_for_buffer(buf)
+            if result[0] is None:
+                continue
+            (obs_t, mov, jmp, atk, yaw, pitch, lp, adv, ret) = result
+            all_obs.append(obs_t)
+            all_mov.append(mov); all_jmp.append(jmp); all_atk.append(atk)
+            all_yaw.append(yaw); all_pitch.append(pitch)
+            all_old_lp.append(lp); all_adv.append(adv); all_ret.append(ret)
+
+        if not all_obs:
+            return {"status": "insufficient_data", "buffer_size": 0}
+
+        obs_t       = torch.cat(all_obs)
+        act_movement= torch.cat(all_mov)
+        act_jump    = torch.cat(all_jmp)
+        act_attack  = torch.cat(all_atk)
+        act_yaw     = torch.cat(all_yaw)
+        act_pitch   = torch.cat(all_pitch)
+        old_log_probs_t = torch.cat(all_old_lp)
+        advantages  = torch.cat(all_adv)
+        returns_t   = torch.cat(all_ret)
+
+        N = obs_t.shape[0]
+        if N < batch_size:
+            return {"status": "insufficient_data", "buffer_size": N}
+
+        # Normalize advantages across all bots (standard PPO practice)
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+        # ---------- PPO minibatch updates ----------
+        total_policy_loss = 0.0
+        total_value_loss = 0.0
+        total_entropy = 0.0
+        total_loss_val = 0.0
+        n_updates = 0
+
+        indices = np.arange(N)
+        mb = self.MINIBATCH_SIZE
+
+        for epoch in range(self.PPO_EPOCHS):
+            np.random.shuffle(indices)
+            for start in range(0, N, mb):
+                end = start + mb
+                if end > N:
+                    break
+                mb_idx = indices[start:end]
+                mb_idx_t = torch.LongTensor(mb_idx).to(self.device)
+
+                mb_obs       = obs_t[mb_idx_t]
+                mb_act_mov   = act_movement[mb_idx_t]
+                mb_act_jmp   = act_jump[mb_idx_t]
+                mb_act_atk   = act_attack[mb_idx_t]
+                mb_act_yaw   = act_yaw[mb_idx_t]
+                mb_act_pitch = act_pitch[mb_idx_t]
+                mb_old_lp    = old_log_probs_t[mb_idx_t]
+                mb_adv       = advantages[mb_idx_t]
+                mb_ret       = returns_t[mb_idx_t]
+
+                new_lp, new_val, ent = self.net.evaluate_actions(
+                    mb_obs, mb_act_mov, mb_act_jmp, mb_act_atk,
+                    mb_act_yaw, mb_act_pitch)
+
+                # Clipped surrogate objective
+                ratio = torch.exp(new_lp - mb_old_lp)
+                surr1 = ratio * mb_adv
+                surr2 = torch.clamp(ratio, 1.0 - self.CLIP_EPS, 1.0 + self.CLIP_EPS) * mb_adv
+                policy_loss = -torch.min(surr1, surr2).mean()
+
+                # Value loss
+                value_loss = 0.5 * (new_val - mb_ret).pow(2).mean()
+
+                entropy_loss = -ent.mean()
+
+                loss = policy_loss + self.VF_COEF * value_loss + self.ENT_COEF * entropy_loss
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.net.parameters(), self.MAX_GRAD_NORM)
+                self.optimizer.step()
+
+                total_policy_loss += policy_loss.item()
+                total_value_loss += value_loss.item()
+                total_entropy += (-entropy_loss).item()
+                total_loss_val += loss.item()
+                n_updates += 1
+
+        # ---------- Metrics ----------
+        avg_policy = total_policy_loss / max(n_updates, 1)
+        avg_value  = total_value_loss / max(n_updates, 1)
+        avg_ent    = total_entropy / max(n_updates, 1)
+        avg_loss   = total_loss_val / max(n_updates, 1)
+
+        self.last_loss = avg_loss
+        self.last_score = total_rewards_sum
+
+        print(f"PPO stats: loss={avg_loss:.6f}, policy={avg_policy:.6f}, "
+              f"value={avg_value:.6f}, entropy={avg_ent:.4f}, "
+              f"return_mean={returns_t.mean().item():.4f}, "
+              f"adv_std={advantages.std().item():.4f}, "
+              f"updates={n_updates}, samples={N}")
+
+        # Clear all per-bot buffers
+        for buf in self._buffers.values():
+            buf.clear()
+        self.observations = []
+        self.reward_types = []
+
         return {
             "status": "success",
             "loss": self.last_loss,
-            "policy_loss": policy_loss.item(),
-            "entropy": entropy.item(),
-            "return_mean": returns_tensor.mean().item(),
-            "return_std": returns_tensor.std().item(),
+            "policy_loss": avg_policy,
+            "value_loss": avg_value,
+            "entropy": avg_ent,
+            "return_mean": returns_t.mean().item(),
+            "return_std": returns_t.std().item(),
             "score": self.last_score,
-            "samples_trained": len(obs_tensor)
+            "samples_trained": N,
+            "ppo_updates": n_updates,
         }
-    
+
     def get_bot_metrics(self, bot_name: str) -> Dict:
-        """Get metrics for a specific bot"""
         return {
             "score": self.bot_scores.get(bot_name, 0.0),
             "loss": self.bot_losses.get(bot_name, 0.0),
             "total_rewards": self.bot_scores.get(bot_name, 0.0),
-            "recent_rewards": []
+            "recent_rewards": [],
         }
+
+    def save(self, path: str):
+        torch.save({
+            "net_state_dict": self.net.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "obs_dim": self.observation_dim,
+            "bot_scores": self.bot_scores,
+            "last_loss": self.last_loss,
+            "last_score": self.last_score,
+        }, path)
+        print(f"[MODEL] Saved to {path}")
+
+    def load(self, path: str):
+        checkpoint = torch.load(path, map_location=self.device)
+        self.net.load_state_dict(checkpoint["net_state_dict"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        self.bot_scores = checkpoint.get("bot_scores", {})
+        self.last_loss = checkpoint.get("last_loss", 0.0)
+        self.last_score = checkpoint.get("last_score", 0.0)
+        print(f"[MODEL] Loaded from {path}")

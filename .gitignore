@@ -34,4 +34,12 @@ mineflayer/node_modules
 !dummy.png
 !/headlessmc/mods/*.jar
 
+# model stuff
+backend/models/*
+backend/models/*/*
+
+*.dll
+*.gz
+*.log
+*.csv
 

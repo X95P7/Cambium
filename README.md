@@ -196,6 +196,8 @@ java -version
 
 The output JAR is at `mod/CambiumMod/build/libs/CambiumMod-1.0.jar`.
 
+> **Important**: Always use `gradlew build`, never `gradlew jar` or `gradlew compileJava` alone. The `build` task includes a reobfuscation step that translates MCP names (like `Blocks.bedrock`) to SRG names used at runtime. Without it, the mod will crash with `NoSuchFieldError` when loaded by Forge.
+
 ### Deploy the mod
 
 Copy the JAR into the headlessmc mods folder so the Docker build picks it up:
@@ -409,6 +411,9 @@ docker compose down
 docker compose up --build -d
 # Then run &setup, &bot-setup, &run in-game again
 ```
+
+### Mod crashes with `NoSuchFieldError: bedrock` (or similar)
+The mod JAR was built with `gradlew jar` or `gradlew compileJava` instead of `gradlew build`. Without the reobfuscation step, MCP field names (e.g. `Blocks.bedrock`) don't match the SRG names Forge uses at runtime. Fix: rebuild with `gradlew clean build` and re-copy the JAR.
 
 ### Rebuilding after code changes
 

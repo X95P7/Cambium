@@ -289,8 +289,10 @@ class PPOAgent:
         reward = self.reward_calculator.calculate_reward(bot_name, current_state, events)
         self.rewards.append(reward)
     
-    def add_done(self, done: bool):
-        """Mark if episode is done."""
+    def add_done(self, bot_name_or_done=None, done: bool = None):
+        """Mark if episode is done. Accepts (bot_name, done) or (done,) for backwards compat."""
+        if done is None:
+            done = bot_name_or_done
         self.dones.append(done)
     
     def train(self, batch_size: int = 64, epochs: int = 4) -> Dict:

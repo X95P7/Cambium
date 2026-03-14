@@ -24,7 +24,7 @@ public class RewardListener {
     // Track previous health to detect damage taken
     private float lastHealth = -1.0f;
     private long lastDamageTakenTime = 0;
-    private static final long DAMAGE_COOLDOWN_MS = 100; // 100ms cooldown between damage events
+    private static final long DAMAGE_COOLDOWN_MS = 25; // 25ms cooldown between damage events
     
     // Track last attack to detect damage dealt
     private Entity lastAttackedEntity = null;
@@ -45,9 +45,6 @@ public class RewardListener {
     
     @SubscribeEvent
     public void onLivingHurt(LivingHurtEvent event) {
-        // Debug: Log that event fired
-        System.out.println("[RewardListener] LivingHurtEvent fired - isRemote: " + event.entity.field_70170_p.field_72995_K);
-        
         // Only process on client side
         if (!event.entity.field_70170_p.field_72995_K) {
             return;
@@ -67,14 +64,12 @@ public class RewardListener {
             EntityPlayer player = (EntityPlayer) entity;
             String botName = player.func_70005_c_();
             
-            // Prevent duplicate damage events within cooldown
             long currentTime = System.currentTimeMillis();
             if (currentTime - lastDamageTakenTime < DAMAGE_COOLDOWN_MS) {
                 return;
             }
             lastDamageTakenTime = currentTime;
             
-            // Send damage_taken event
             JsonArray events = new JsonArray();
             JsonObject damageEvent = new JsonObject();
             damageEvent.addProperty("type", "damage_taken");
@@ -87,8 +82,7 @@ public class RewardListener {
             System.out.println("[RewardListener] [EVENT] Bot " + botName + " took " + damage + " damage");
             sendRewardEvents(events);
             
-            // Update last health
-            lastHealth = player.func_110143_aJ() - damage; // Health after taking damage
+            lastHealth = player.func_110143_aJ() - damage;
         }
         
         // Check if our bot dealt damage to another entity
@@ -96,38 +90,29 @@ public class RewardListener {
             EntityPlayer attacker = (EntityPlayer) source.func_76346_g();
             String botName = attacker.func_70005_c_();
             
-            // Prevent duplicate damage events within cooldown
             long currentTime = System.currentTimeMillis();
             if (currentTime - lastDamageDealtTime < DAMAGE_COOLDOWN_MS) {
                 return;
             }
             
-            // Only send if we're attacking a player (PvP)
             if (entity instanceof EntityPlayer) {
                 lastDamageDealtTime = currentTime;
                 
                 EntityPlayer target = (EntityPlayer) entity;
                 float targetMaxHealth = target.func_110138_aP();
+                float damagePercentage = Math.min(damage / targetMaxHealth, 1.0f);
                 
-                // Calculate damage as percentage of target's max health
-                // This makes rewards scale with how much damage relative to target health
-                float damagePercentage = (damage / targetMaxHealth);
-                // Cap at 1.0 (100% of max health)
-                if (damagePercentage > 1.0f) damagePercentage = 1.0f;
-                
-                // Send damage_dealt event with percentage-based reward
                 JsonArray events = new JsonArray();
                 JsonObject damageEvent = new JsonObject();
                 damageEvent.addProperty("type", "damage_dealt");
-                damageEvent.addProperty("amount", damage); // Raw damage for tracking
-                damageEvent.addProperty("damage_percentage", damagePercentage); // Percentage for reward scaling
+                damageEvent.addProperty("amount", damage);
+                damageEvent.addProperty("damage_percentage", damagePercentage);
                 damageEvent.addProperty("target", entity.func_70005_c_());
                 events.add(damageEvent);
                 
                 System.out.println("[RewardListener] [EVENT] Bot " + botName + " dealt " + damage + " damage (" + (damagePercentage * 100) + "%) to " + entity.func_70005_c_());
                 sendRewardEvents(events);
                 
-                // Track target health for future reference
                 lastAttackedEntity = entity;
                 lastAttackedEntityHealth = target.func_110143_aJ();
             }
@@ -136,22 +121,15 @@ public class RewardListener {
     
     @SubscribeEvent
     public void onAttackEntity(AttackEntityEvent event) {
-        // Debug: Log that event fired
-        System.out.println("[RewardListener] AttackEntityEvent fired - isRemote: " + event.entity.field_70170_p.field_72995_K);
-        
-        // This fires when player clicks to attack, before damage is calculated
-        // We can use this to track attack attempts
         if (event.entity.field_70170_p.field_72995_K && event.entity instanceof EntityPlayer) {
             EntityPlayer player = (EntityPlayer) event.entity;
             Minecraft mc = Minecraft.func_71410_x();
             
             if (player.equals(mc.field_71439_g) && event.target instanceof EntityPlayer) {
-                // Bot is attacking another player - track this for damage detection
                 lastAttackedEntity = event.target;
                 lastAttackedEntityHealth = ((EntityPlayer) event.target).func_110143_aJ();
                 isAttacking = true;
                 lastAttackStartTime = System.currentTimeMillis();
-                System.out.println("[RewardListener] [EVENT] Bot started attacking " + event.target.func_70005_c_());
             }
         }
     }
@@ -189,83 +167,37 @@ public class RewardListener {
         lastAimCheckTime = currentTime;
         
         // Find closest enemy player
-        EntityPlayer closestEnemy = null;
+        EntityPlayer closestEnemy = findClosestEnemy(player, mc, 50.0);
         double closestDistance = Double.MAX_VALUE;
-        
-        for (Object obj : mc.field_71441_e.field_72996_f) {
-            if (obj instanceof EntityPlayer && !obj.equals(player)) {
-                EntityPlayer enemy = (EntityPlayer) obj;
-                if (enemy.field_70128_L || enemy.func_110143_aJ() <= 0) {
-                    continue;
-                }
-                
-                double dx = enemy.field_70165_t - player.field_70165_t;
-                double dy = enemy.field_70163_u - player.field_70163_u;
-                double dz = enemy.field_70161_v - player.field_70161_v;
-                double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                
-                if (distance < closestDistance && distance < 50.0) { // Only check within 50 blocks
-                    closestDistance = distance;
-                    closestEnemy = enemy;
-                }
-            }
+        if (closestEnemy != null) {
+            double dx = closestEnemy.field_70165_t - player.field_70165_t;
+            double dy = closestEnemy.field_70163_u - player.field_70163_u;
+            double dz = closestEnemy.field_70161_v - player.field_70161_v;
+            closestDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
         }
         
         if (closestEnemy != null) {
             // Calculate angle to enemy - use BODY CENTER (posY + 0.9) not feet for melee hit accuracy
-            double targetY = closestEnemy.field_70163_u + 0.9; // Approximate center of player hitbox
+            double targetY = closestEnemy.field_70163_u + 0.9;
             double dx = closestEnemy.field_70165_t - player.field_70165_t;
-            double dy = targetY - (player.field_70163_u + player.func_70047_e()); // Aim from our eyes to their body center
+            double dy = targetY - (player.field_70163_u + player.func_70047_e());
             double dz = closestEnemy.field_70161_v - player.field_70161_v;
             
-            // Calculate target yaw (angle in horizontal plane)
-            // Minecraft yaw: 0=South(+Z), 90=West(-X), -90=East(+X)
-            // atan2(-dx, dz) matches this convention
             double targetYaw = Math.atan2(-dx, dz) * 180.0 / Math.PI;
-            
-            // Calculate target pitch (angle in vertical plane)
             double horizontalDist = Math.sqrt(dx * dx + dz * dz);
             double targetPitch = -Math.atan2(dy, horizontalDist) * 180.0 / Math.PI;
             
-            // Get player's current rotation
             float playerYaw = player.field_70177_z;
             float playerPitch = player.field_70125_A;
             
-            // Normalize angles to -180 to 180 range
             playerYaw = normalizeYaw(playerYaw);
             targetYaw = normalizeYaw(targetYaw);
             
-            // Calculate angle differences
             double yawDiff = Math.abs(normalizeYaw(playerYaw - targetYaw));
             double pitchDiff = Math.abs(playerPitch - targetPitch);
-            
-            // Get maximum angle difference (worst case)
             double maxAngle = Math.max(yawDiff, pitchDiff);
             
-            // If player is looking at enemy (within 30 degrees) and close (within 5 blocks), 
-            // track this enemy for damage detection (in case AttackEntityEvent doesn't fire)
-            if (maxAngle < 30.0 && closestDistance < 5.0) {
-                // Check if attack key might be pressed (check if player is swinging)
-                boolean mightBeAttacking = player.field_82175_bq || 
-                                          (player.field_70733_aJ > 0 && player.field_70733_aJ < 1.0f);
-                
-                if (mightBeAttacking || isAttacking) {
-                    // Track this enemy for damage detection
-                    if (lastAttackedEntity == null || !lastAttackedEntity.equals(closestEnemy)) {
-                        lastAttackedEntity = closestEnemy;
-                        lastAttackedEntityHealth = closestEnemy.func_110143_aJ();
-                        isAttacking = true;
-                        lastAttackStartTime = currentTime;
-                    }
-                }
-            }
-            
             // Calculate aim score (percentage-based)
-            // Perfect aim (within 5 degrees) = 1.0
-            // Within 10 degrees = 0.8
-            // Within 20 degrees = 0.5
-            // Within 45 degrees = 0.2
-            // Narrower cone: no reward for 45-90° to avoid reinforcing "sweeping past"
             double aimScore = 0.0;
             if (maxAngle < 5) {
                 aimScore = 1.0;
@@ -276,11 +208,9 @@ public class RewardListener {
             } else if (maxAngle < 45) {
                 aimScore = 0.2;
             }
-            // maxAngle >= 45: no reward (was 0.05 for 45-90° - removed to discourage spinning)
             
             if (aimScore > 0) {
                 consecutiveAimChecks++;
-                // Only send good_aim when sustained on target (2+ checks = ~200ms) to avoid rewarding sweep-through
                 if (consecutiveAimChecks >= AIM_SUSTAINED_THRESHOLD) {
                     JsonArray events = new JsonArray();
                     JsonObject aimEvent = new JsonObject();
@@ -293,10 +223,10 @@ public class RewardListener {
                     sendRewardEvents(events);
                 }
             } else {
-                consecutiveAimChecks = 0; // Reset when we lose the target
+                consecutiveAimChecks = 0;
             }
         } else {
-            consecutiveAimChecks = 0; // No enemy in range
+            consecutiveAimChecks = 0;
         }
     }
     
@@ -306,36 +236,30 @@ public class RewardListener {
     private void checkDamageTaken(EntityPlayer player, long currentTime) {
         float currentHealth = player.func_110143_aJ();
         
-        // Initialize lastHealth on first run
         if (lastHealth < 0) {
             lastHealth = currentHealth;
             return;
         }
         
-        // Check if health decreased (damage taken)
         if (currentHealth < lastHealth) {
             float damage = lastHealth - currentHealth;
             
-            // Ignore very small changes (could be regeneration or rounding)
             if (damage < 0.1f) {
                 lastHealth = currentHealth;
                 return;
             }
             
-            // Prevent duplicate damage events within cooldown
             if (currentTime - lastDamageTakenTime < DAMAGE_COOLDOWN_MS) {
                 lastHealth = currentHealth;
                 return;
             }
             lastDamageTakenTime = currentTime;
             
-            // Send damage_taken event
             JsonArray events = new JsonArray();
             JsonObject damageEvent = new JsonObject();
             damageEvent.addProperty("type", "damage_taken");
             damageEvent.addProperty("amount", damage);
             
-            // Try to find attacker by checking nearby entities
             String attackerName = findAttacker(player);
             if (attackerName != null) {
                 damageEvent.addProperty("attacker", attackerName);
@@ -352,75 +276,98 @@ public class RewardListener {
     }
     
     /**
-     * Checks if bot dealt damage by monitoring enemy health changes
+     * Checks if bot dealt damage by monitoring the closest enemy's health.
+     * In a 1v1 arena, any health drop on the enemy = damage we dealt.
+     * No swing/attack detection needed — just continuous health monitoring.
      */
     private void checkDamageDealt(EntityPlayer player, Minecraft mc, long currentTime) {
-        // Only check if we're currently attacking or recently attacked
-        if (lastAttackedEntity == null || !(lastAttackedEntity instanceof EntityPlayer)) {
-            // Reset attack state if too much time has passed
-            if (isAttacking && currentTime - lastAttackStartTime > 2000) {
+        // Always track the closest living enemy (1v1 arena assumption)
+        EntityPlayer target = findClosestEnemy(player, mc, 50.0);
+        
+        if (target == null) {
+            if (lastAttackedEntity != null) {
+                lastAttackedEntity = null;
+                lastAttackedEntityHealth = -1.0f;
                 isAttacking = false;
             }
             return;
         }
         
-        EntityPlayer target = (EntityPlayer) lastAttackedEntity;
-        
-        // Check if target is still valid
-        if (target.field_70128_L || target.func_110143_aJ() <= 0) {
-            lastAttackedEntity = null;
-            lastAttackedEntityHealth = -1.0f;
-            isAttacking = false;
+        // If target changed, reset health tracking
+        if (lastAttackedEntity == null || !target.equals(lastAttackedEntity)) {
+            lastAttackedEntity = target;
+            lastAttackedEntityHealth = target.func_110143_aJ();
             return;
         }
         
         float currentTargetHealth = target.func_110143_aJ();
+        boolean targetDead = target.field_70128_L || currentTargetHealth <= 0;
         
-        // Initialize target health on first check
         if (lastAttackedEntityHealth < 0) {
-            lastAttackedEntityHealth = currentTargetHealth;
+            lastAttackedEntityHealth = targetDead ? -1.0f : currentTargetHealth;
+            if (targetDead) {
+                lastAttackedEntity = null;
+                isAttacking = false;
+            }
             return;
         }
         
-        // Check if target health decreased (damage dealt)
+        // Any health decrease on the enemy = damage we dealt (1v1 assumption)
         if (currentTargetHealth < lastAttackedEntityHealth) {
             float damage = lastAttackedEntityHealth - currentTargetHealth;
             
-            // Ignore very small changes (could be regeneration or rounding)
-            if (damage < 0.1f) {
-                lastAttackedEntityHealth = currentTargetHealth;
-                return;
+            if (damage >= 0.1f && (currentTime - lastDamageDealtTime >= DAMAGE_COOLDOWN_MS)) {
+                lastDamageDealtTime = currentTime;
+                
+                float targetMaxHealth = target.func_110138_aP();
+                float damagePercentage = Math.min(damage / targetMaxHealth, 1.0f);
+                
+                JsonArray events = new JsonArray();
+                JsonObject damageEvent = new JsonObject();
+                damageEvent.addProperty("type", "damage_dealt");
+                damageEvent.addProperty("amount", damage);
+                damageEvent.addProperty("damage_percentage", damagePercentage);
+                damageEvent.addProperty("target", target.func_70005_c_());
+                events.add(damageEvent);
+                
+                System.out.println("[RewardListener] [TICK] Bot " + player.func_70005_c_() + " dealt " + damage + " damage (" + (damagePercentage * 100) + "%) to " + target.func_70005_c_() + " (health: " + lastAttackedEntityHealth + " -> " + currentTargetHealth + ")");
+                sendRewardEvents(events);
             }
-            
-            // Prevent duplicate damage events within cooldown
-            if (currentTime - lastDamageDealtTime < DAMAGE_COOLDOWN_MS) {
-                lastAttackedEntityHealth = currentTargetHealth;
-                return;
-            }
-            lastDamageDealtTime = currentTime;
-            
-            // Calculate damage as percentage of target's max health
-            float targetMaxHealth = target.func_110138_aP();
-            float damagePercentage = (damage / targetMaxHealth);
-            if (damagePercentage > 1.0f) damagePercentage = 1.0f;
-            
-            // Send damage_dealt event
-            JsonArray events = new JsonArray();
-            JsonObject damageEvent = new JsonObject();
-            damageEvent.addProperty("type", "damage_dealt");
-            damageEvent.addProperty("amount", damage);
-            damageEvent.addProperty("damage_percentage", damagePercentage);
-            damageEvent.addProperty("target", target.func_70005_c_());
-            events.add(damageEvent);
-            
-            String botName = player.func_70005_c_();
-            System.out.println("[RewardListener] [TICK] Bot " + botName + " dealt " + damage + " damage (" + (damagePercentage * 100) + "%) to " + target.func_70005_c_() + " (health: " + lastAttackedEntityHealth + " -> " + currentTargetHealth + ")");
-            sendRewardEvents(events);
         }
         
         lastAttackedEntityHealth = currentTargetHealth;
+        
+        if (targetDead) {
+            lastAttackedEntity = null;
+            lastAttackedEntityHealth = -1.0f;
+            isAttacking = false;
+        }
     }
     
+    /**
+     * Finds the closest living enemy player within maxDist blocks.
+     */
+    private EntityPlayer findClosestEnemy(EntityPlayer player, Minecraft mc, double maxDist) {
+        if (mc.field_71441_e == null) return null;
+        EntityPlayer closest = null;
+        double best = Double.MAX_VALUE;
+        for (Object obj : mc.field_71441_e.field_72996_f) {
+            if (obj instanceof EntityPlayer && !obj.equals(player)) {
+                EntityPlayer enemy = (EntityPlayer) obj;
+                if (enemy.field_70128_L || enemy.func_110143_aJ() <= 0) continue;
+                double dx = enemy.field_70165_t - player.field_70165_t;
+                double dy = enemy.field_70163_u - player.field_70163_u;
+                double dz = enemy.field_70161_v - player.field_70161_v;
+                double d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                if (d < maxDist && d < best) {
+                    best = d;
+                    closest = enemy;
+                }
+            }
+        }
+        return closest;
+    }
+
     /**
      * Tries to find the attacker by checking nearby entities
      */
@@ -430,7 +377,6 @@ public class RewardListener {
             return null;
         }
         
-        // Check nearby players (within 10 blocks)
         double maxDistance = 10.0;
         EntityPlayer closestEnemy = null;
         double closestDistance = Double.MAX_VALUE;
@@ -457,9 +403,6 @@ public class RewardListener {
         return closestEnemy != null ? closestEnemy.func_70005_c_() : null;
     }
     
-    /**
-     * Normalizes yaw angle to -180 to 180 range
-     */
     private float normalizeYaw(float yaw) {
         while (yaw > 180.0f) {
             yaw -= 360.0f;
@@ -470,9 +413,6 @@ public class RewardListener {
         return yaw;
     }
     
-    /**
-     * Normalizes yaw angle to -180 to 180 range (double version)
-     */
     private double normalizeYaw(double yaw) {
         while (yaw > 180.0) {
             yaw -= 360.0;
@@ -501,10 +441,8 @@ public class RewardListener {
             
             String botName = mc.field_71439_g.func_70005_c_();
             
-            // Build current state from player data
             JsonObject currentState = buildCurrentState(mc.field_71439_g);
             
-            // Build request JSON
             JsonObject request = new JsonObject();
             request.addProperty("bot_name", botName);
             request.add("events", events);
@@ -513,19 +451,15 @@ public class RewardListener {
             String requestJson = request.toString();
             System.out.println("[RewardListener] Sending " + events.size() + " reward event(s) for " + botName + " to /add-reward/");
             
-            // Send to API and check response
             String response = APIClient.postRequest("/add-reward/", requestJson);
             
             if (response == null) {
-                // Log error - API request failed
                 System.err.println("[RewardListener] FAILED to send reward events for " + botName + ". Response was null. Check API connection.");
                 AIChatController.addChatLine("Reward API Error: Request failed for " + botName);
             } else {
-                // Success - log for debugging
                 System.out.println("[RewardListener] Successfully sent " + events.size() + " reward event(s) for " + botName + ". Response: " + response);
             }
         } catch (Exception e) {
-            // Log error instead of silently failing
             System.err.println("[RewardListener] Exception sending reward events: " + e.getMessage());
             e.printStackTrace();
             AIChatController.addChatLine("Reward Exception: " + e.getMessage());
@@ -538,7 +472,6 @@ public class RewardListener {
     private JsonObject buildCurrentState(EntityPlayer player) {
         JsonObject state = new JsonObject();
         
-        // Player data
         JsonObject playerData = new JsonObject();
         playerData.addProperty("health", player.func_110143_aJ());
         playerData.addProperty("x", player.field_70165_t);
@@ -547,7 +480,6 @@ public class RewardListener {
         playerData.addProperty("yaw", player.field_70177_z);
         playerData.addProperty("pitch", player.field_70125_A);
         
-        // Get armor points
         int armorPoints = 0;
         if (player.field_71071_by.field_70460_b[3] != null) armorPoints += 2; // Helmet
         if (player.field_71071_by.field_70460_b[2] != null) armorPoints += 2; // Chestplate
@@ -560,4 +492,3 @@ public class RewardListener {
         return state;
     }
 }
-

@@ -171,6 +171,7 @@ Check individual bot logs `rosie/logs/Bot1_<JOB_ID>.log`. The bots wait for the 
 **Rebuild after code changes**
 If you change the mod source code:
 1. Build locally: `cd mod/CambiumMod && ./gradlew clean build` (or `.\gradlew.bat clean build` on Windows)
+   - **Must use `gradlew build`**, not `gradlew jar`. Only `build` includes reobfuscation. Without it the mod crashes with `NoSuchFieldError` at runtime.
 2. Copy JAR: `cp build/libs/CambiumMod-1.0.jar ../../headlessmc/mods/`
 3. Push to git and pull on Rosie, or `scp` the JAR directly
 4. Delete the old Singularity image: `rm rosie/images/cambium-headlessmc.sif`
