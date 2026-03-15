@@ -4,6 +4,20 @@
 # Never timeout
 set timeout -1
 
+# Parse server address early (used for wait checks, connect, and reconnect)
+set server_set 0
+set mc_host "mc-forge"
+set mc_port "25565"
+if {[info exists env(SERVER)] && [string length $env(SERVER)] > 0} {
+  set server_set 1
+  if {[regexp {^([^:]+):(\d+)$} $env(SERVER) match h p]} {
+    set mc_host $h
+    set mc_port $p
+  } elseif {[regexp {^([^:]+)$} $env(SERVER) match h]} {
+    set mc_host $h
+  }
+}
+
 
 # 0) Ensure mods directory exists and copy mods if needed
 # Since /opt/hmc/run is a volume, we need to ensure mods are there at runtime
@@ -20,13 +34,8 @@ expect eof
 
 
 # 1) Wait for the Minecraft server to be up
-puts "Waiting for mc-forge to start..."
-spawn sh -c {
-  until nc -z -v -w30 mc-forge 25565; do
-    echo "Waiting for mc-forge on port 25565..."
-    sleep 5
-  done
-}
+puts "Waiting for $mc_host:$mc_port to start..."
+spawn sh -c "until nc -z -v -w30 $mc_host $mc_port; do echo 'Waiting for $mc_host on port $mc_port...'; sleep 5; done"
 expect eof
 
 
@@ -90,39 +99,32 @@ if {$doLogin} {
 }
 
 
-# 3) Enter the interactive HeadlessMC prompt
+# 3) Launch HeadlessMC with Forge
 puts "Entering HeadlessMC prompt..."
+
+set hmc_jar "headlessmc-launcher-$env(HMC_VERSION).jar"
+set launch_target "forge:$env(MC_VERSION)"
+
 if {$useXvfb} {
   puts "Using virtual framebuffer (xvfb) for headless rendering"
+  set java_prefix "xvfb-run -a java -Dhmc.check.xvfb=true"
 } else {
   puts "Running without virtual framebuffer (xvfb disabled)"
+  set java_prefix "java -Dhmc.check.xvfb=false"
 }
 
-
-# For offline mode, use the -offline flag and username is handled by the game profile
 if {$doLogin} {
-  # Online mode: launch normally
-  if {$useXvfb} {
-    spawn xvfb-run -a java -Dhmc.check.xvfb=true \
-      -jar headlessmc-launcher-${env(HMC_VERSION)}.jar \
-      --command launch forge:${env(MC_VERSION)}
-  } else {
-    spawn java -Dhmc.check.xvfb=false \
-      -jar headlessmc-launcher-${env(HMC_VERSION)}.jar \
-      --command launch forge:${env(MC_VERSION)}
-  }
+  set launch_cmd "$java_prefix -jar $hmc_jar --command launch $launch_target"
 } else {
-  # Offline mode: use -offline flag and pass username as system property
-  if {$useXvfb} {
-    spawn xvfb-run -a java -Dhmc.check.xvfb=true -Dhmc.offline.username=$username \
-      -jar headlessmc-launcher-${env(HMC_VERSION)}.jar \
-      --command launch forge:${env(MC_VERSION)} -offline
-  } else {
-    spawn java -Dhmc.check.xvfb=false -Dhmc.offline.username=$username \
-      -jar headlessmc-launcher-${env(HMC_VERSION)}.jar \
-      --command launch forge:${env(MC_VERSION)} -offline
-  }
+  set launch_cmd "$java_prefix -Dhmc.offline.username=$username -jar $hmc_jar --command launch $launch_target -offline"
 }
+
+if {[info exists env(HEADLESSMC_COMMAND)] && [string length $env(HEADLESSMC_COMMAND)] > 0} {
+  append launch_cmd " $env(HEADLESSMC_COMMAND)"
+}
+
+puts "Launch: $launch_cmd"
+spawn sh -c $launch_cmd
 
 
 # 4) Wait for game to fully load and then send connect commands
@@ -164,24 +166,11 @@ puts "Waiting for game to be in main menu..."
 sleep 5
 
 
-# Parse SERVER environment variable (format: host:port or just host)
-set host ""
-set port "25565"
-if {[info exists env(SERVER)] && [string length $env(SERVER)] > 0} {
-  set server $env(SERVER)
-  if {[regexp {^([^:]+):(\d+)$} $server match h p]} {
-    set host $h
-    set port $p
-  } elseif {[regexp {^([^:]+)$} $server match h]} {
-    set host $h
-  } else {
-    set host $server
-  }
-
-  puts "Attempting to connect to $host:$port"
+if {$server_set} {
+  puts "Attempting to connect to $mc_host:$mc_port"
   sleep 1
-  send "connect $host $port\r"
-  send_user "Sent connect command: connect $host $port\n"
+  send "connect $mc_host $mc_port\r"
+  send_user "Sent connect command: connect $mc_host $mc_port\n"
 
   puts "Waiting for connection to establish..."
   sleep 15
@@ -207,8 +196,8 @@ while {1} {
 
       set serverBack 0
       while {!$serverBack} {
-        puts "Checking if mc-forge:25565 is reachable..."
-        if {[catch {exec sh -c {nc -z -w5 mc-forge 25565 2>/dev/null}} result]} {
+        puts "Checking if $mc_host:$mc_port is reachable..."
+        if {[catch {exec sh -c "nc -z -w5 $mc_host $mc_port 2>/dev/null"} result]} {
           puts "Server not yet available, retrying in 10 seconds..."
           sleep 10
         } else {
@@ -219,8 +208,8 @@ while {1} {
       puts "Server is back! Waiting 20 seconds for it to fully start..."
       sleep 20
 
-      puts "Attempting to reconnect to $host:$port ..."
-      send "connect $host $port\r"
+      puts "Attempting to reconnect to $mc_host:$mc_port ..."
+      send "connect $mc_host $mc_port\r"
       puts "Reconnect command sent, waiting for connection..."
       sleep 15
       send "say I'm back!\r"

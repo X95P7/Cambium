@@ -5,6 +5,7 @@ public class EntityData {
     //Use varibles over Vectors to make API communication simpler
     private boolean isProjectile;
     private boolean isPlayer;
+    private String name;
     private double health;
     private double armor;
     private double handDamage;
@@ -20,9 +21,10 @@ public class EntityData {
     private double facingYaw;
     private double facingPitch;
 
-    public EntityData(boolean isProjectile, boolean isPlayer, double health, double armor, double handDamage, double relativeX, double relativeY, double relativeZ, double veloX, double veloY, double veloZ, double facingYaw, double facingPitch) {
+    public EntityData(boolean isProjectile, boolean isPlayer, String name, double health, double armor, double handDamage, double relativeX, double relativeY, double relativeZ, double veloX, double veloY, double veloZ, double facingYaw, double facingPitch) {
         this.isProjectile = isProjectile;
         this.isPlayer = isPlayer;
+        this.name = name;
         this.health = health;
         this.armor = armor;
         this.handDamage = handDamage;
@@ -54,6 +56,10 @@ public class EntityData {
 
     public boolean isPlayer(){
         return isPlayer;
+    }
+
+    public String getName(){
+        return name != null ? name : "";
     }
 
     public double getRelativeX(){
@@ -89,7 +95,7 @@ public class EntityData {
     }
 
     public String toString(){
-        return "Projectile: " + isProjectile + " Player: " + isPlayer + " X: " + relativeX + " Y: " + relativeY + " Z: " + relativeZ + " VeloX: " + veloX + " VeloY: " + veloY + " VeloZ: " + veloZ + " FacingYaw: " + facingYaw + " FacingPitch: " + facingPitch + " Health: " + health + " Armor: " + armor + " HandDamage: " + handDamage;
+        return "Projectile: " + isProjectile + " Player: " + isPlayer + " Name: " + name + " X: " + relativeX + " Y: " + relativeY + " Z: " + relativeZ + " VeloX: " + veloX + " VeloY: " + veloY + " VeloZ: " + veloZ + " FacingYaw: " + facingYaw + " FacingPitch: " + facingPitch + " Health: " + health + " Armor: " + armor + " HandDamage: " + handDamage;
     }
 
 }

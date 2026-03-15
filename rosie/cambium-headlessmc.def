@@ -51,9 +51,9 @@ EOF
     mkdir -p /root/.minecraft/mods
 
 %files
-    ../headlessmc/entrypoint.sh /opt/hmc/entrypoint.sh
-    ../headlessmc/mods/ /opt/hmc/run/mods/
-    ../headlessmc/mods/ /root/.minecraft/mods/
+    headlessmc/entrypoint.sh /opt/hmc/entrypoint.sh
+    headlessmc/mods/ /opt/hmc/run/mods/
+    headlessmc/mods/ /root/.minecraft/mods/
 
 %post
     chmod +x /opt/hmc/entrypoint.sh

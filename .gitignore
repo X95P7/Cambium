@@ -43,3 +43,26 @@ backend/models/*/*
 *.log
 *.csv
 
+# Python
+*.pyc
+__pycache__/
+venv/
+.venv/
+env/
+.env/
+
+# Additional Logs
+*logs.json
+tmp_*.json
+experimental logs/
+rosie/logs/
+*.err
+*.out
+
+# Extra Generated Directories
+rosie/mc-data/
+rosie/images/
+rosie/hmc/
+mod/CambiumMod/build/
+mod/CambiumMod/.gradle/
+models/

@@ -171,6 +171,7 @@ public class RLControllerStrategy extends AIStrategy {
                 JsonObject e = new JsonObject();
                 e.addProperty("isProjectile", entity.isProjectile());
                 e.addProperty("isPlayer", entity.isPlayer());
+                e.addProperty("name", entity.getName());
                 e.addProperty("health", entity.getHealth());
                 e.addProperty("armor", entity.getArmor());
                 e.addProperty("handDamage", entity.getHandDamage());

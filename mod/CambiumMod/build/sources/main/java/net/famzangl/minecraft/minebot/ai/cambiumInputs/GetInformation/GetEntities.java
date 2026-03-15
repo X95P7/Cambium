@@ -36,6 +36,7 @@ public class GetEntities {
 
             // Check if the entity is a player
             boolean isPlayer = entity instanceof EntityPlayer;
+            String entityName = isPlayer ? entity.getName() : "";
 
             //Remove particles
             boolean relevent = entity instanceof EntityLivingBase || isProjectile || isPlayer; 
@@ -66,7 +67,7 @@ public class GetEntities {
             float facingPitch = entity.rotationPitch;
 
             // Add entity data to the list
-            entityDataList.add(new EntityData(isProjectile, isPlayer, health, armor, handDamage, relativeX, relativeY, relativeZ, veloX, veloY, veloZ, facingYaw, facingPitch));
+            entityDataList.add(new EntityData(isProjectile, isPlayer, entityName, health, armor, handDamage, relativeX, relativeY, relativeZ, veloX, veloY, veloZ, facingYaw, facingPitch));
         }
 
         return entityDataList;

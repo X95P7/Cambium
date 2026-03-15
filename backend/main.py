@@ -22,6 +22,9 @@ arenas = areanaA.Arenas
 
 app = FastAPI()
 
+# Protects all pairing, arena assignment, and episode reset operations
+_match_lock = asyncio.Lock()
+
 # Serve static files (frontend)
 import os
 frontend_path = os.path.join(os.path.dirname(__file__), "frontend")
@@ -39,6 +42,18 @@ async def _startup_idle_checker():
             await asyncio.sleep(10)
             _check_bot_idle()
     asyncio.create_task(_loop())
+
+@app.on_event("shutdown")
+async def _shutdown_cleanup():
+    """Save model and close RCON on shutdown."""
+    try:
+        _autosave_model("shutdown")
+    except Exception:
+        pass
+    try:
+        _close_rcon()
+    except Exception:
+        pass
 
 @app.get("/")
 async def read_root():
@@ -82,13 +97,29 @@ observation_space_config = {
     "includeArmor": False
 }
 
-# Model configuration - maps bot names to model versions
-bot_model_mapping = {
-    "Bot1": "0.1",
-    "Bot2": "0.1",
-}  # bot_name -> model_version (e.g., "0.0", "0.1", etc.)
+# Experiment mode: set CAMBIUM_EXPERIMENT=baseline to disable training (collect random-policy data only)
+EXPERIMENT_MODE = os.getenv("CAMBIUM_EXPERIMENT", "training")
+NO_TRAIN = os.getenv("CAMBIUM_NO_TRAIN", "0") == "1" or EXPERIMENT_MODE == "baseline"
 
-# Removed tick_times tracking - not needed anymore
+# Sparse reward ablation (2.3): types zeroed in sparse mode; exclude from backup aggregation when CAMBIUM_REWARD_MODE=sparse
+SPARSE_ZERO_REWARD_TYPES = frozenset({'good_aim', 'proximity', 'pitch_control', 'aim_hold', 'extreme_pitch_penalty'})
+# Reward types that form the "sparse component" for fair comparison across baseline / sparse / shaped runs
+SPARSE_COMPONENT_TYPES = frozenset({'damage_dealt', 'damage_taken', 'won_duel', 'death', 'episode_timeout', 'no_damage_penalty'})
+# Fixed order of reward-type columns for CSV so header and every row have the same columns (no unnamed trailing columns)
+CSV_REWARD_TYPES = (
+    'aim_hold', 'damage_dealt', 'damage_taken', 'death', 'episode_timeout',
+    'extreme_pitch_penalty', 'good_aim', 'no_damage_penalty', 'pitch_control',
+    'proximity', 'won_duel'
+)
+
+# Model configuration - maps bot names to model versions
+# In baseline mode, bots still use 0.1 path (so observations/rewards are recorded)
+# but actions are sampled randomly instead of from the policy network.
+_DEFAULT_VERSION = "0.1"
+bot_model_mapping = {
+    "Bot1": _DEFAULT_VERSION,
+    "Bot2": _DEFAULT_VERSION,
+}  # bot_name -> model_version (e.g., "0.0", "0.1", etc.)
 
 # Initialize PPO Agent
 # Estimate observation and action dimensions based on config
@@ -111,7 +142,8 @@ def estimate_observation_dim():
 # ---------------------------------------------------------------------------
 LOGS_DIR = os.path.join(os.path.dirname(__file__), "logs")
 os.makedirs(LOGS_DIR, exist_ok=True)
-_log_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+_experiment_tag = f"_{EXPERIMENT_MODE}" if EXPERIMENT_MODE != "training" else ""
+_log_session_id = datetime.now().strftime("%Y%m%d_%H%M%S") + _experiment_tag
 EVENT_LOG_PATH = os.path.join(LOGS_DIR, f"events_{_log_session_id}.log")
 
 def _log_event(category: str, message: str, **extra):
@@ -128,7 +160,8 @@ def _log_event(category: str, message: str, **extra):
         pass
     print(parts)
 
-_log_event("SERVER", "Backend process starting", session=_log_session_id)
+_log_event("SERVER", "Backend process starting", session=_log_session_id,
+           experiment=EXPERIMENT_MODE, no_train=NO_TRAIN)
 
 # Initialize Fast RL agent (for version 0.1)
 try:
@@ -145,8 +178,11 @@ try:
     print(f"Fast RL agent initialized successfully: obs_dim={obs_dim}, device={rl_device}")
 
     # Auto-resume: look for the most recent .pt file in models/
+    # In baseline mode, skip auto-resume so the agent starts with random weights
     _models_dir = os.path.join(os.path.dirname(__file__), "models")
-    if os.path.isdir(_models_dir):
+    if NO_TRAIN:
+        _log_event("SERVER", "Baseline mode: skipping model auto-resume (random weights)")
+    elif os.path.isdir(_models_dir):
         import glob as _glob
         _pt_files = sorted(_glob.glob(os.path.join(_models_dir, "model_*.pt")),
                            key=os.path.getmtime)
@@ -173,10 +209,21 @@ try:
 
     ppo_agent = None
 except Exception as e:
-    print(f"ERROR initializing Fast RL agent: {e}")
-    import traceback
-    traceback.print_exc()
-    fast_rl_agent = None
+    print(f"ERROR initializing Fast RL agent on {rl_device}: {e}")
+    if rl_device != "cpu":
+        print("Falling back to CPU for RL agent...")
+        try:
+            fast_rl_agent = FastRLAgent(
+                observation_dim=obs_dim,
+                device="cpu",
+                hidden_dim=256
+            )
+            print(f"Fast RL agent initialized on CPU (fallback): obs_dim={obs_dim}")
+        except Exception as e2:
+            print(f"ERROR initializing Fast RL agent on CPU fallback: {e2}")
+            fast_rl_agent = None
+    else:
+        fast_rl_agent = None
     ppo_agent = None
 
 # Bot state tracking for rewards
@@ -192,8 +239,9 @@ bot_tick_counts = {}  # bot_name -> tick count
 BACKPROP_INTERVAL = 200  # Train every 200 ticks (more samples = lower variance)
 
 # Episode length cap - force episode end after N seconds (prevents 10-15 min duels)
+# Override with CAMBIUM_EPISODE_TIMEOUT_SEC for ablation experiments (e.g. 120).
 bot_episode_start = {}  # bot_name -> wall-clock time when current episode started
-MAX_EPISODE_LENGTH_SEC = 15
+MAX_EPISODE_LENGTH_SEC = int(os.getenv("CAMBIUM_EPISODE_TIMEOUT_SEC", "15"))
 timeout_killed_bots = set()  # bots killed by episode timeout — death endpoint should ignore these
 bot_episode_damage_dealt: Dict[str, int] = {}  # bot_name -> count of damage_dealt events this episode
 _bot_reset_until = {}  # bot_name -> timestamp: suppress damage events from /kill commands during reset
@@ -302,7 +350,8 @@ def _autosave_model(reason: str = "autosave"):
 
 
 def _write_training_log(stats: Dict, reward_type_data: Dict, bot_stats: Dict,
-                        samples: int, trigger_reason: str):
+                        samples: int, trigger_reason: str,
+                        sparse_component_reward: float = None):
     """Append one interval's stats to the .log and .csv files."""
     global _csv_header_written, _training_interval_counter
     _training_interval_counter += 1
@@ -318,17 +367,24 @@ def _write_training_log(stats: Dict, reward_type_data: Dict, bot_stats: Dict,
     score       = stats.get("score", 0.0)
     ppo_updates = stats.get("ppo_updates", 0)
     avg_reward  = score / max(samples, 1)
+    if sparse_component_reward is None:
+        sparse_component_reward = sum(
+            reward_type_data.get(rt, {}).get("amount", 0.0) for rt in SPARSE_COMPONENT_TYPES
+        )
 
-    # Per-reward-type breakdown
+    # Per-reward-type breakdown (human-readable log: only types present)
     rt_lines = []
-    rt_csv_parts = {}
     for rtype in sorted(reward_type_data.keys()):
         rd = reward_type_data[rtype]
         cnt = rd.get("count", 0)
         amt = rd.get("amount", 0.0)
         rt_lines.append(f"    {rtype:25s}  count={cnt:4d}  total={amt:+9.4f}  avg={amt/max(cnt,1):+.4f}")
-        rt_csv_parts[f"r_{rtype}_count"] = cnt
-        rt_csv_parts[f"r_{rtype}_total"] = round(amt, 4)
+    # CSV: fixed set of columns so header and every row match (no unnamed trailing columns)
+    rt_csv_parts = {}
+    for rtype in CSV_REWARD_TYPES:
+        rd = reward_type_data.get(rtype, {})
+        rt_csv_parts[f"r_{rtype}_count"] = rd.get("count", 0)
+        rt_csv_parts[f"r_{rtype}_total"] = round(rd.get("amount", 0.0), 4)
 
     # --- Human-readable log ---
     block = [
@@ -338,6 +394,7 @@ def _write_training_log(stats: Dict, reward_type_data: Dict, bot_stats: Dict,
         f"  Samples:        {samples}",
         f"  PPO updates:    {ppo_updates}",
         f"  Total reward:   {score:+.4f}",
+        f"  Sparse component (comparable): {sparse_component_reward:+.4f}",
         f"  Avg reward/step:{avg_reward:+.6f}",
         f"  Return mean:    {ret_mean:+.4f}   std: {ret_std:.4f}",
         f"  Loss:           {loss:.6f}  (policy={policy_loss:.6f}  value={value_loss:.6f})",
@@ -364,6 +421,7 @@ def _write_training_log(stats: Dict, reward_type_data: Dict, bot_stats: Dict,
         "samples": samples,
         "ppo_updates": ppo_updates,
         "total_reward": round(score, 4),
+        "sparse_component_reward": round(sparse_component_reward, 4),
         "avg_reward": round(avg_reward, 6),
         "return_mean": round(ret_mean, 4),
         "return_std": round(ret_std, 4),
@@ -525,44 +583,93 @@ def calculate_auto_rewards(bot_name: str, observation: Dict) -> List[Dict]:
     
     return events
 
-def mc_command(command: str):
-    try:
-        with MCRcon(RCON_HOST, RCON_PASSWORD, port=RCON_PORT) as mcr:
-            response = mcr.command(command)
-        return response
-    except Exception as e:
-        print(f"[RCON ERROR] Command '{command}' failed: {e}")
-        return str(e)
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from mcrcon import MCRconException
 
-from concurrent.futures import ProcessPoolExecutor
-_rcon_pool = ProcessPoolExecutor(max_workers=2)
+# ---------------------------------------------------------------------------
+# Monkey-patch MCRcon so it uses socket.settimeout() instead of signal.alarm.
+# signal.alarm only works in the main thread; we run RCON in a thread pool.
+# ---------------------------------------------------------------------------
+_MCRcon_orig_connect = MCRcon.connect
+
+def _mcrcon_init_no_signal(self, host, password, port=25575, tlsmode=0, timeout=5):
+    self.host = host
+    self.password = password
+    self.port = port
+    self.tlsmode = tlsmode
+    self.timeout = timeout
+
+def _mcrcon_connect_with_socket_timeout(self):
+    _MCRcon_orig_connect(self)
+    if self.socket and self.timeout:
+        self.socket.settimeout(self.timeout)
+
+def _mcrcon_read_no_signal(self, length):
+    data = b""
+    while len(data) < length:
+        chunk = self.socket.recv(length - len(data))
+        if not chunk:
+            raise MCRconException("Connection closed by server")
+        data += chunk
+    return data
+
+MCRcon.__init__ = _mcrcon_init_no_signal
+MCRcon.connect = _mcrcon_connect_with_socket_timeout
+MCRcon._read = _mcrcon_read_no_signal
+# ---------------------------------------------------------------------------
+
+_rcon_lock = threading.Lock()
+_rcon_conn: MCRcon | None = None
+_rcon_pool = ThreadPoolExecutor(max_workers=1)
+
+def _get_rcon() -> MCRcon:
+    """Return (and lazily create) a persistent RCON connection."""
+    global _rcon_conn
+    if _rcon_conn is None:
+        _rcon_conn = MCRcon(RCON_HOST, RCON_PASSWORD, port=RCON_PORT)
+        _rcon_conn.connect()
+    return _rcon_conn
+
+def _close_rcon():
+    global _rcon_conn
+    if _rcon_conn is not None:
+        try:
+            _rcon_conn.disconnect()
+        except Exception:
+            pass
+        _rcon_conn = None
+
+def mc_command(command: str) -> str:
+    """Send an RCON command using the persistent connection with retry."""
+    global _rcon_conn
+    with _rcon_lock:
+        for attempt in range(3):
+            try:
+                conn = _get_rcon()
+                return conn.command(command)
+            except Exception as e:
+                print(f"[RCON ERROR] attempt {attempt+1}/3 '{command}': {e}")
+                _close_rcon()
+                if attempt == 2:
+                    return f"RCON_FAIL: {e}"
+                time.sleep(0.1 * (attempt + 1))
+    return "RCON_FAIL: exhausted retries"
 
 _gamerules_set = False
-
-_RCON_SPACING_SEC = 0.05  # seconds between RCON commands to avoid ConcurrentModificationException
-_last_rcon_time = 0.0
+_RCON_SPACING_SEC = 0.02
 
 async def send_mc_command(command: str):
-    global _gamerules_set, _last_rcon_time
+    global _gamerules_set
     loop = asyncio.get_event_loop()
     if not _gamerules_set:
         _gamerules_set = True
         await loop.run_in_executor(_rcon_pool, mc_command, "/gamerule sendCommandFeedback false")
-        await asyncio.sleep(_RCON_SPACING_SEC)
         await loop.run_in_executor(_rcon_pool, mc_command, "/gamerule commandBlockOutput false")
-        await asyncio.sleep(_RCON_SPACING_SEC)
         await loop.run_in_executor(_rcon_pool, mc_command, "/gamerule logAdminCommands false")
-        await asyncio.sleep(_RCON_SPACING_SEC)
 
-    # Space out commands so the server tick can finish between entity modifications
-    now = time.time()
-    elapsed = now - _last_rcon_time
-    if elapsed < _RCON_SPACING_SEC:
-        await asyncio.sleep(_RCON_SPACING_SEC - elapsed)
-
+    await asyncio.sleep(_RCON_SPACING_SEC)
     result = await loop.run_in_executor(_rcon_pool, mc_command, command)
-    _last_rcon_time = time.time()
-    print(f"[RCON] '{command}' -> {result}")
     return {"sent_command": command, "response": result}
 
 async def calibration_mode_action(bot_name: str):
@@ -667,14 +774,13 @@ async def trigger_backprop(bot_name: str = None):
     Triggers backpropagation training.
     Can be called periodically or when a duel ends.
     Logs statistics every 100 ticks.
+    In NO_TRAIN mode (baseline experiment), logs reward stats but skips training.
     """
     try:
-        # Check if we have enough data to train
         agent = fast_rl_agent if fast_rl_agent else ppo_agent
         if agent is None:
             return {"status": "skipped", "reason": "no_agent"}
         
-        # Aggregate stats across all per-bot buffers
         all_rewards = []
         all_actions = []
         total_samples = 0
@@ -706,16 +812,28 @@ async def trigger_backprop(bot_name: str = None):
                 action_tuples = all_actions
             unique_actions = len(set(action_tuples)) if action_tuples else 0
             action_diversity = unique_actions / len(all_actions) if all_actions else 0.0
-            print(f"Training with {total_samples} samples, rewards: min={min(all_rewards) if all_rewards else 0:.4f}, "
+            print(f"{'[BASELINE] ' if NO_TRAIN else ''}Interval with {total_samples} samples, rewards: min={min(all_rewards) if all_rewards else 0:.4f}, "
                   f"max={max(all_rewards) if all_rewards else 0:.4f}, "
                   f"mean={avg_reward_before:.4f}, sum={total_rewards_before:.4f}, "
                   f"action_diversity={action_diversity:.2%} ({unique_actions}/{len(all_actions)} unique)")
         except (IndexError, AttributeError, TypeError) as e:
-            print(f"Training with {total_samples} samples, sum={total_rewards_before:.4f} (stats skipped: {e})")
+            print(f"{'[BASELINE] ' if NO_TRAIN else ''}Interval with {total_samples} samples, sum={total_rewards_before:.4f} (stats skipped: {e})")
         
-        stats = agent.train(batch_size=64, epochs=4)
-        print(f"Backprop completed for {bot_name or 'all bots'}: loss={stats.get('loss', 0):.6f}, "
-              f"policy_loss={stats.get('policy_loss', 0):.6f}, entropy={stats.get('entropy', 0):.4f}")
+        if NO_TRAIN:
+            stats = {
+                "loss": 0.0, "policy_loss": 0.0, "value_loss": 0.0,
+                "entropy": 0.0, "return_mean": 0.0, "return_std": 0.0,
+                "score": total_rewards_before, "samples_trained": total_samples,
+                "ppo_updates": 0,
+            }
+            if fast_rl_agent and hasattr(fast_rl_agent, '_buffers'):
+                for buf in fast_rl_agent._buffers.values():
+                    buf.clear()
+            print(f"[BASELINE] Logged stats for {bot_name or 'all bots'}, skipped training (NO_TRAIN mode)")
+        else:
+            stats = agent.train(batch_size=64, epochs=4)
+            print(f"Backprop completed for {bot_name or 'all bots'}: loss={stats.get('loss', 0):.6f}, "
+                  f"policy_loss={stats.get('policy_loss', 0):.6f}, entropy={stats.get('entropy', 0):.4f}")
         
         # Calculate statistics after training
         # Note: stats["score"] is the sum of rewards before clearing, which is what we want
@@ -723,10 +841,10 @@ async def trigger_backprop(bot_name: str = None):
         loss = stats.get("loss", 0.0)
         samples_trained = stats.get("samples_trained", 0)
         
-        # Aggregate reward type data from the interval (before training clears the buffer)
+        # Aggregate reward type data from the interval.
+        # (Buffers were just cleared by train(), so we use bot_reward_events backup below if this is empty.)
         reward_type_data = {}  # {type: {'count': int, 'amount': float}}
         
-        # Collect reward types from all per-bot buffers
         if fast_rl_agent and hasattr(fast_rl_agent, '_buffers'):
             for buf in fast_rl_agent._buffers.values():
                 for reward_type_dict in buf.reward_types:
@@ -765,6 +883,9 @@ async def trigger_backprop(bot_name: str = None):
                             event = event_log.get("event", {})
                             event_type = event.get("type", "")
                             if event_type:
+                                # Sparse ablation: don't record shaping types in logs when CAMBIUM_REWARD_MODE=sparse
+                                if os.getenv("CAMBIUM_REWARD_MODE") == "sparse" and event_type in SPARSE_ZERO_REWARD_TYPES:
+                                    continue
                                 if event_type not in reward_type_data:
                                     reward_type_data[event_type] = {'count': 0, 'amount': 0.0}
                                 reward_type_data[event_type]['count'] += 1
@@ -779,6 +900,11 @@ async def trigger_backprop(bot_name: str = None):
         else:
             print(f"[BACKPROP] WARNING: No reward types found")
         
+        # Comparable metric: reward from sparse components only (same scale for baseline / sparse / shaped runs)
+        sparse_component_reward = sum(
+            reward_type_data.get(rt, {}).get("amount", 0.0) for rt in SPARSE_COMPONENT_TYPES
+        )
+
         # Get current bot statistics
         bot_stats = {}
         for bot in botController.bots:
@@ -787,7 +913,7 @@ async def trigger_backprop(bot_name: str = None):
                 "status": bot.status,
                 "tick_count": bot_tick_counts.get(bot_name_key, 0),
                 "score": fast_rl_agent.bot_scores.get(bot_name_key, 0.0) if fast_rl_agent else 0.0,
-                "model_version": bot_model_mapping.get(bot_name_key, "0.1")
+                "model_version": bot_model_mapping.get(bot_name_key, _DEFAULT_VERSION)
             }
         
         # Create log entry
@@ -804,6 +930,7 @@ async def trigger_backprop(bot_name: str = None):
                 "total_rewards": total_rewards_for_interval,
                 "avg_reward_per_sample": avg_reward_before,
                 "reward_delta": total_rewards_for_interval - total_rewards_before,
+                "sparse_component_reward": sparse_component_reward,
                 "reward_types": reward_type_data
             },
             "bot_statistics": bot_stats,
@@ -826,16 +953,17 @@ async def trigger_backprop(bot_name: str = None):
         # Write to persistent log files
         try:
             _write_training_log(stats, reward_type_data, bot_stats,
-                                samples_trained, bot_name or "all")
+                                samples_trained, bot_name or "all",
+                                sparse_component_reward=sparse_component_reward)
         except Exception as log_err:
             print(f"[LOG] Failed to write training log: {log_err}")
 
-        # Mark model as modified so shutdown saves are meaningful
-        global _autosave_counter
-        _autosave_counter += 1
-        if _autosave_counter >= AUTOSAVE_INTERVAL:
-            _autosave_counter = 0
-            _autosave_model(f"interval_{len(training_logs)}")
+        if not NO_TRAIN:
+            global _autosave_counter
+            _autosave_counter += 1
+            if _autosave_counter >= AUTOSAVE_INTERVAL:
+                _autosave_counter = 0
+                _autosave_model(f"interval_{len(training_logs)}")
 
         return stats
     except Exception as e:
@@ -885,18 +1013,11 @@ async def predict_action(version: str, request: Request):
     Version 0.0: Calibration mode - cycles W -> A -> S -> D -> spin
     Version 0.1: Simple random actions (PPO disabled for now due to performance issues)
     """
-    # Log immediately - this should always print
-    print(f"[PREDICT-START] Version: {version}, Time: {time.time()}")
-    import sys
-    sys.stdout.flush()  # Force flush to ensure logs appear
-    
     start_time = time.time()
     
     try:
         data = await request.json()
     except Exception as e:
-        print(f"[PREDICT] Error parsing JSON: {e}")
-        sys.stdout.flush()
         return {"action": {"movement": 0, "jump": False, "sneak": False, "sprint": False, "attack": False, "useItem": False, "hotbar": -1, "yaw": 0.0, "pitch": 0.0}}
     
     observation = data.get("observation", {})
@@ -947,22 +1068,15 @@ async def predict_action(version: str, request: Request):
                 api_call_rate = 1.0 / avg_interval
                 tick_rate = api_call_rate * (20.0 / 3.0)
     
-    # Check if backprop is needed (every 400 ticks)
-    should_trigger_backprop = False
+    # Backprop is triggered only on episode end (timeout or duel end), not every N ticks.
+    # Still cap tick count so it doesn't grow unbounded (for logging).
     if bot_tick_counts[bot_name] >= BACKPROP_INTERVAL:
         bot_tick_counts[bot_name] = 0
-        should_trigger_backprop = True
     
     # Calibration mode for version 0.0
     if version == "0.0":
-        #print(f"[PREDICT] Using calibration mode for {bot_name}")
-        sys.stdout.flush()
         result = await calibration_mode_action(bot_name)
         result["tick_rate"] = tick_rate
-        
-        # Trigger backprop if needed (asynchronously, don't block)
-        if should_trigger_backprop:
-            asyncio.create_task(trigger_backprop(bot_name))
         
         return result
     
@@ -973,15 +1087,9 @@ async def predict_action(version: str, request: Request):
             bot_states[bot_name] = {}
         bot_states[bot_name]["current_state"] = observation
         
-        # Simple observation caching - hash observation to avoid re-processing
-        import hashlib
-        obs_str = json.dumps(observation, sort_keys=True)
-        obs_hash = hashlib.md5(obs_str.encode()).hexdigest()
-        
         # Check if Fast RL agent is available
         if fast_rl_agent is None:
             print(f"[PREDICT] WARNING: Fast RL agent not initialized, using random fallback")
-            sys.stdout.flush()
             import random
             action = {
                 "movement": random.randint(0, 7),
@@ -1006,29 +1114,36 @@ async def predict_action(version: str, request: Request):
         try:
             pred_start = time.time()
 
-            # Episode length cap: force episode end after 15 seconds (per-bot timer)
+            # Episode length cap: force episode end after MAX_EPISODE_LENGTH_SEC.
+            # Only the first bot in a pair to detect the timeout handles it;
+            # the paired bot's timer is also reset so it won't double-fire.
             now = time.time()
             if bot_name not in bot_episode_start:
                 bot_episode_start[bot_name] = now
-            elif len(fast_rl_agent.observations) > 0 and (now - bot_episode_start[bot_name]) >= MAX_EPISODE_LENGTH_SEC:
-                # Timeout - end episode and reset both bots (same as death)
-                timeout_event = {"type": "episode_timeout", "amount": -0.1}
-                bot = getBotByName(bot_name)
+            elif (now - bot_episode_start[bot_name]) >= MAX_EPISODE_LENGTH_SEC:
+                bot_obj = getBotByName(bot_name)
+                pair_name = None
+                if bot_obj and hasattr(bot_obj, 'pair') and bot_obj.pair and bot_obj.pair != "NONE":
+                    pair_name = bot_obj.pair.name
 
-                # Penalize passive play: if a bot dealt no damage this episode, add penalty
+                # Immediately reset BOTH timers so the paired bot's next
+                # predict-action won't also trigger a timeout.
+                bot_episode_start[bot_name] = now
+                if pair_name:
+                    bot_episode_start[pair_name] = now
+
+                timeout_event = {"type": "episode_timeout", "amount": -0.1}
+
                 timeout_events_self = [timeout_event]
                 if bot_episode_damage_dealt.get(bot_name, 0) == 0:
                     timeout_events_self.append({"type": "no_damage_penalty"})
                     _log_event("REWARD", f"{bot_name} penalized for no damage dealt this episode")
 
-                # Add timeout reward + done for this bot
                 state = bot_states[bot_name].get("current_state", bot_states[bot_name].get("latest_observation", {}))
                 fast_rl_agent.add_reward(bot_name, state, timeout_events_self)
                 fast_rl_agent.add_done(bot_name, True)
 
-                # Add timeout reward + done for the paired bot too
-                if bot and hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
-                    pair_name = bot.pair.name
+                if pair_name:
                     timeout_events_pair = [timeout_event]
                     if bot_episode_damage_dealt.get(pair_name, 0) == 0:
                         timeout_events_pair.append({"type": "no_damage_penalty"})
@@ -1036,21 +1151,18 @@ async def predict_action(version: str, request: Request):
                     if pair_name in bot_states:
                         fast_rl_agent.add_reward(pair_name, bot_states[pair_name], timeout_events_pair)
                         fast_rl_agent.add_done(pair_name, True)
-                    # Reset paired bot's timer and damage counter
-                    bot_episode_start[pair_name] = now
                     bot_episode_damage_dealt[pair_name] = 0
+                    bot_tick_counts[pair_name] = 0
 
                 asyncio.create_task(trigger_backprop(f"episode_timeout_{bot_name}"))
-                bot_episode_start[bot_name] = now
                 bot_episode_damage_dealt[bot_name] = 0
                 bot_tick_counts[bot_name] = 0
-                if bot and hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
-                    bot_tick_counts[bot.pair.name] = 0
                 _log_event("EPISODE", f"Timeout ({MAX_EPISODE_LENGTH_SEC}s) for {bot_name} — resetting both bots")
-                sys.stdout.flush()
 
-                # Reset bots: give kits, heal, teleport (same as death handler)
-                asyncio.create_task(_reset_bots_after_timeout(bot))
+                async def _locked_reset(b):
+                    async with _match_lock:
+                        await _reset_bots_after_timeout(b)
+                asyncio.create_task(_locked_reset(bot_obj))
 
 
             # Filter entities to only include the paired opponent (not spectators/user).
@@ -1074,20 +1186,10 @@ async def predict_action(version: str, request: Request):
                         non_players.append(ent)
                 observation['entities'] = opponent + non_players
 
-            # Use cached observation vector if available and observation hasn't changed
-            obs_hash_filtered = hash(str(observation))
-            cached_vector = None
-            if bot_name in bot_last_observation_hash and bot_name in bot_cached_obs_vector:
-                if obs_hash_filtered == bot_last_observation_hash[bot_name]:
-                    cached_vector = bot_cached_obs_vector[bot_name]
-            
-            # Run synchronously - should be fast enough
-            action = fast_rl_agent.predict_action(observation, action_space, cached_vector=cached_vector, bot_name=bot_name)
-            
-            # Cache the observation vector for next time (if we computed a new one)
-            if cached_vector is None and len(fast_rl_agent.observations) > 0:
-                bot_cached_obs_vector[bot_name] = fast_rl_agent.observations[-1].copy()
-                bot_last_observation_hash[bot_name] = obs_hash_filtered
+            if NO_TRAIN:
+                action = fast_rl_agent.random_action(observation, action_space, bot_name=bot_name)
+            else:
+                action = fast_rl_agent.predict_action(observation, action_space, bot_name=bot_name)
             
             # Auto-rewards applied AFTER prediction so they credit the current step
             auto_reward_events = calculate_auto_rewards(bot_name, observation)
@@ -1108,12 +1210,10 @@ async def predict_action(version: str, request: Request):
             pred_time = time.time() - pred_start
             if pred_time > 0.1:
                 print(f"[PREDICT] Fast RL prediction took {pred_time*1000:.1f}ms for {bot_name} (target: <50ms)")
-            sys.stdout.flush()
             bot_last_actions[bot_name] = action
             bot_action_timestamps[bot_name] = time.time()
         except Exception as e:
             print(f"[PREDICT] ERROR in Fast RL prediction for {bot_name}: {e}")
-            sys.stdout.flush()
             import traceback
             traceback.print_exc()
             # Use cached action if available
@@ -1147,7 +1247,6 @@ async def predict_action(version: str, request: Request):
     # Version 0.2+ would use PPO (when we fix it)
     # For now, fallback to random
     print(f"[PREDICT] Unknown version {version}, using random fallback")
-    sys.stdout.flush()
     import random
     action = {
         "movement": random.randint(0, 7),
@@ -1178,51 +1277,48 @@ async def bot_setup(request: Request):
     data = await request.json()
     name = data.get("name")
 
-    existingBot = getBotByName(name)
-    if existingBot is not None:
-        print(f"Bot reconnected: {name} (already registered)")
-        _log_event("BOT", f"{name} reconnected via bot-setup")
+    async with _match_lock:
+        existingBot = getBotByName(name)
+        if existingBot is not None:
+            print(f"Bot reconnected: {name} (already registered)")
+            _log_event("BOT", f"{name} reconnected via bot-setup")
 
-        # Clear old partner's reference to this bot
-        oldPair = existingBot.pair
-        if oldPair and oldPair != "NONE":
-            oldPair.pair = "NONE"
-            oldPair.updateBot("ready")
-            if hasattr(oldPair, 'arena') and oldPair.arena:
-                oldPair.arena.status = "open"
-                oldPair.arena = ""
+            oldPair = existingBot.pair
+            if oldPair and oldPair != "NONE":
+                oldPair.pair = "NONE"
+                oldPair.updateBot("ready")
+                if hasattr(oldPair, 'arena') and oldPair.arena:
+                    oldPair.arena.status = "open"
+                    oldPair.arena = ""
 
-        existingBot.updateBot("ready")
-        existingBot.pair = "NONE"
-        if hasattr(existingBot, 'arena') and existingBot.arena:
-            existingBot.arena.status = "open"
-            existingBot.arena = ""
+            existingBot.updateBot("ready")
+            existingBot.pair = "NONE"
+            if hasattr(existingBot, 'arena') and existingBot.arena:
+                existingBot.arena.status = "open"
+                existingBot.arena = ""
 
-        # Reset episode timer
-        bot_episode_start[name] = time.time()
+            bot_episode_start[name] = time.time()
 
-        await giveKit(existingBot)
+            await giveKit(existingBot)
 
-        move = botController.pairBot(existingBot)
+            move = botController.pairBot(existingBot)
+            if move == 1:
+                await fightBots(existingBot, existingBot.pair)
+                return await send_mc_command(f"/say Bot {name} reconnected and paired with {existingBot.pair.name}!")
+            else:
+                return await send_mc_command(f"/say Bot {name} reconnected. Waiting for pair...")
+
+        print(f"Bot setup for: {name}")
+        currentBot = Bot(name, "ready", Kit(classicKit.kitStart, classicKit.kitEnd, name), "agent")
+        botController.addBot(currentBot)
+        await giveKit(currentBot)
+
+        move = botController.pairBot(currentBot)
         if move == 1:
-            await fightBots(existingBot, existingBot.pair)
-            return await send_mc_command(f"/say Bot {name} reconnected and paired with {existingBot.pair.name}!")
+            await fightBots(currentBot, currentBot.pair)
+            return await send_mc_command(f"/say Bot {name} has been added and paired with {currentBot.pair.name}!")
         else:
-            return await send_mc_command(f"/say Bot {name} reconnected. Waiting for pair...")
-
-    print(f"Bot setup for: {name}")
-    currentBot = Bot(name, "ready", Kit(classicKit.kitStart, classicKit.kitEnd, name), "agent")
-    botController.addBot(currentBot)
-    await giveKit(currentBot)
-    
-    # Try to pair with another bot
-    move = botController.pairBot(currentBot)
-    if move == 1:
-        # Pair found, start duel
-        await fightBots(currentBot, currentBot.pair)
-        return await send_mc_command(f"/say Bot {name} has been added and paired with {currentBot.pair.name}!")
-    else:
-        return await send_mc_command(f"/say Bot {name} has been added to the game. Waiting for pair...")
+            return await send_mc_command(f"/say Bot {name} has been added to the game. Waiting for pair...")
 
 
 @app.post("/death/")
@@ -1233,104 +1329,90 @@ async def death(request: Request):
     """
     data = await request.json()
     name = data.get("name")
-    bot = getBotByName(name)
-    
-    if not bot:
-        return {"status": "error", "message": f"Bot {name} not found"}
 
-    # Skip if this death was caused by an episode timeout reset (timeout handler owns the reset)
-    if name in timeout_killed_bots:
-        timeout_killed_bots.discard(name)
-        return {"status": "ignored", "message": f"Death for {name} caused by episode timeout, handled elsewhere"}
+    async with _match_lock:
+        bot = getBotByName(name)
 
-    _log_event("DUEL", f"{name} died", arena=getattr(bot, 'arena', None),
-               pair=getattr(bot, 'pair', None))
-    bot.updateBot("dead")
+        if not bot:
+            return {"status": "error", "message": f"Bot {name} not found"}
 
-    # Reset episode timers for both bots (new duel = fresh 15s clock)
-    bot_episode_start[name] = time.time()
-    if hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
-        bot_episode_start[bot.pair.name] = time.time()
+        if name in timeout_killed_bots:
+            timeout_killed_bots.discard(name)
+            return {"status": "ignored", "message": f"Death for {name} caused by episode timeout, handled elsewhere"}
 
-    # Add reward event for death (negative reward)
-    if name in bot_states:
-        death_event = {"type": "death", "amount": -1.0}
-        
-        # Log death event for frontend display
-        if name not in bot_reward_events:
-            bot_reward_events[name] = []
-        bot_reward_events[name].append({
-            "timestamp": datetime.now().isoformat(),
-            "bot_name": name,
-            "event": death_event.copy(),
-            "source": "death_endpoint"
-        })
-        if len(bot_reward_events[name]) > MAX_REWARD_EVENTS_PER_BOT:
-            bot_reward_events[name] = bot_reward_events[name][-MAX_REWARD_EVENTS_PER_BOT:]
-        
-        if fast_rl_agent:
-            fast_rl_agent.add_reward(name, bot_states[name], [death_event])
-            fast_rl_agent.add_done(name, True)
-        elif ppo_agent:
-            ppo_agent.add_reward(name, bot_states[name], [death_event])
-            ppo_agent.add_done(name, True)
-    
-    # If bot has a pair, give winning reward to the pair
-    if hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
-        pair_name = bot.pair.name
-        if pair_name in bot_states:
-            won_duel_event = {"type": "won_duel", "amount": 10.0}
-            
-            # Log won_duel event for frontend display
-            if pair_name not in bot_reward_events:
-                bot_reward_events[pair_name] = []
-            bot_reward_events[pair_name].append({
+        _log_event("DUEL", f"{name} died", arena=getattr(bot, 'arena', None),
+                   pair=getattr(bot, 'pair', None))
+        bot.updateBot("dead")
+
+        bot_episode_start[name] = time.time()
+        pair = bot.pair if hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE" else None
+        if pair:
+            bot_episode_start[pair.name] = time.time()
+
+        if name in bot_states:
+            death_event = {"type": "death", "amount": -1.0}
+
+            if name not in bot_reward_events:
+                bot_reward_events[name] = []
+            bot_reward_events[name].append({
                 "timestamp": datetime.now().isoformat(),
-                "bot_name": pair_name,
-                "event": won_duel_event.copy(),
+                "bot_name": name,
+                "event": death_event.copy(),
                 "source": "death_endpoint"
             })
-            if len(bot_reward_events[pair_name]) > MAX_REWARD_EVENTS_PER_BOT:
-                bot_reward_events[pair_name] = bot_reward_events[pair_name][-MAX_REWARD_EVENTS_PER_BOT:]
-            
-            if fast_rl_agent:
-                fast_rl_agent.add_reward(pair_name, bot_states[pair_name], [won_duel_event])
-                fast_rl_agent.add_done(pair_name, True)
-            elif ppo_agent:
-                ppo_agent.add_reward(pair_name, bot_states[pair_name], [won_duel_event])
-                ppo_agent.add_done(pair_name, True)
-    
-    # Trigger backprop when duel ends (asynchronously, don't block)
-    asyncio.create_task(trigger_backprop(f"{name}_duel_end"))
+            if len(bot_reward_events[name]) > MAX_REWARD_EVENTS_PER_BOT:
+                bot_reward_events[name] = bot_reward_events[name][-MAX_REWARD_EVENTS_PER_BOT:]
 
-    # Reset per-episode damage counters
-    bot_episode_damage_dealt[name] = 0
-    if hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
-        bot_episode_damage_dealt[bot.pair.name] = 0
-    
-    # Open the arena if bot was in one
-    if hasattr(bot, 'arena') and bot.arena:
-        bot.arena.status = "open"
-    
-    # Start new duel with paired bot if available
-    if hasattr(bot, 'pair') and bot.pair and bot.pair != "NONE":
-        # Reset both bots to ready
-        bot.updateBot("ready")
-        bot.pair.updateBot("ready")
-        await send_mc_command(f"/effect {name} minecraft:instant_health 1 100")
-        await send_mc_command(f"/effect {bot.pair.name} minecraft:instant_health 1 100")
-        await send_mc_command(f"/effect {name} minecraft:saturation 9999 100")
-        await send_mc_command(f"/effect {bot.pair.name} minecraft:saturation 9999 100")
-        # Start new duel by calling fightBots directly
-        await fightBots(bot, bot.pair)
-        return await send_mc_command(f"/say Bot {name} has died! Starting new duel.")
-    else:
-        # Try to pair with another bot
-        move = botController.pairBot(bot)
-        if move == 1:
-            await fightBots(bot, bot.pair)
-            return await send_mc_command(f"/say Bot {name} has died! Paired with {bot.pair.name}.")
-    
+            if fast_rl_agent:
+                fast_rl_agent.add_reward(name, bot_states[name], [death_event])
+                fast_rl_agent.add_done(name, True)
+            elif ppo_agent:
+                ppo_agent.add_reward(name, bot_states[name], [death_event])
+                ppo_agent.add_done(name, True)
+
+        if pair:
+            pair_name = pair.name
+            if pair_name in bot_states:
+                won_duel_event = {"type": "won_duel", "amount": 10.0}
+
+                if pair_name not in bot_reward_events:
+                    bot_reward_events[pair_name] = []
+                bot_reward_events[pair_name].append({
+                    "timestamp": datetime.now().isoformat(),
+                    "bot_name": pair_name,
+                    "event": won_duel_event.copy(),
+                    "source": "death_endpoint"
+                })
+                if len(bot_reward_events[pair_name]) > MAX_REWARD_EVENTS_PER_BOT:
+                    bot_reward_events[pair_name] = bot_reward_events[pair_name][-MAX_REWARD_EVENTS_PER_BOT:]
+
+                if fast_rl_agent:
+                    fast_rl_agent.add_reward(pair_name, bot_states[pair_name], [won_duel_event])
+                    fast_rl_agent.add_done(pair_name, True)
+                elif ppo_agent:
+                    ppo_agent.add_reward(pair_name, bot_states[pair_name], [won_duel_event])
+                    ppo_agent.add_done(pair_name, True)
+
+        asyncio.create_task(trigger_backprop(f"{name}_duel_end"))
+
+        bot_episode_damage_dealt[name] = 0
+        if pair:
+            bot_episode_damage_dealt[pair.name] = 0
+
+        if hasattr(bot, 'arena') and bot.arena:
+            bot.arena.status = "open"
+
+        if pair:
+            bot.updateBot("ready")
+            pair.updateBot("ready")
+            await fightBots(bot, pair)
+            return await send_mc_command(f"/say Bot {name} has died! Starting new duel.")
+        else:
+            move = botController.pairBot(bot)
+            if move == 1:
+                await fightBots(bot, bot.pair)
+                return await send_mc_command(f"/say Bot {name} has died! Paired with {bot.pair.name}.")
+
     return await send_mc_command(f"/say Bot {name} has died!")
 
 async def giveKit(bot: Bot):
@@ -1344,15 +1426,34 @@ def getBotByName(name):
     return None
 
 async def fightBots(bot1, bot2):
+    """Pair two bots, claim an arena, teleport, and kit them.
+    Caller MUST hold _match_lock."""
+    # Release any arena these bots were previously in
+    for b in (bot1, bot2):
+        if hasattr(b, 'arena') and b.arena:
+            b.arena.status = "open"
+            b.arena = ""
+
     arena = getOpenArena()
     if arena is None:
-        print("No open arenas")
-        return await send_mc_command(f"/say ERROR: No open arenas for {bot1.name} and {bot2.name} to fight in.")
+        print(f"[MATCH] No open arenas for {bot1.name} and {bot2.name}")
+        return
+
+    # Atomically claim
+    arena.status = "closed"
     bot1.updateBot("fighting")
     bot2.updateBot("fighting")
     bot1.setArena(arena)
     bot2.setArena(arena)
-    arena.status = "closed"
+    bot1.pairAgainst(bot2)
+
+    # Reset episode timers
+    now = time.time()
+    bot_episode_start[bot1.name] = now
+    bot_episode_start[bot2.name] = now
+    bot_episode_damage_dealt[bot1.name] = 0
+    bot_episode_damage_dealt[bot2.name] = 0
+
     coords1 = ' '.join(map(str, arena.spawnCoords[0]))
     coords2 = ' '.join(map(str, arena.spawnCoords[1]))
     await send_mc_command(f"/tp {bot1.name} {coords1}")
@@ -1441,7 +1542,7 @@ async def get_model(request: Request):
     if not bot_name:
         return {"status": "error", "message": "bot_name query parameter required"}
     
-    model_version = bot_model_mapping.get(bot_name, "0.1")
+    model_version = bot_model_mapping.get(bot_name, _DEFAULT_VERSION)
     return {
         "status": "success",
         "bot_name": bot_name,
@@ -1575,10 +1676,8 @@ async def save_model(request: Request):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_label = label.replace(" ", "_")[:40] if label else ""
     filename = f"model_{ts}{'_' + safe_label if safe_label else ''}"
-    model_path = f"models/{filename}.pt"
-    stats_path = f"models/{filename}_stats.json"
-
-    os.makedirs("models", exist_ok=True)
+    model_path = os.path.join(AUTOSAVE_DIR, f"{filename}.pt")
+    stats_path = os.path.join(AUTOSAVE_DIR, f"{filename}_stats.json")
 
     try:
         agent = fast_rl_agent or ppo_agent
@@ -1707,7 +1806,7 @@ async def add_reward(request: Request):
             bot_episode_damage_dealt[bot_name] = bot_episode_damage_dealt.get(bot_name, 0) + 1
 
     # Only add rewards to training buffer for bots running the RL model.
-    bot_version = bot_model_mapping.get(bot_name, "0.1")
+    bot_version = bot_model_mapping.get(bot_name, _DEFAULT_VERSION)
     agent = fast_rl_agent if fast_rl_agent else ppo_agent
     if agent and events and bot_version == "0.1":
         state_to_use = current_state if current_state else bot_states.get(bot_name, {})
@@ -1724,46 +1823,20 @@ async def add_reward(request: Request):
 async def start_duel(request: Request):
     """
     Starts a duel between two bots.
-    Gives bots items, heals them, and teleports them to arena.
     """
     data = await request.json()
     bot1_name = data.get("bot1")
     bot2_name = data.get("bot2")
-    
-    bot1 = getBotByName(bot1_name)
-    bot2 = getBotByName(bot2_name)
-    
-    if not bot1 or not bot2:
-        return {"status": "error", "message": "One or both bots not found"}
-    
-    # Give kits
-    await giveKit(bot1)
-    await giveKit(bot2)
-    
-    # Heal bots
-    await send_mc_command(f"/heal {bot1_name}")
-    await send_mc_command(f"/heal {bot2_name}")
-    
-    # Get arena and teleport
-    arena = getOpenArena()
-    if arena:
-        bot1.setArena(arena)
-        bot2.setArena(arena)
-        arena.status = "closed"
-        
-        # Teleport bots to arena positions
-        await send_mc_command(f"/tp {bot1_name} {' '.join(map(str, arena.spawnCoords[0]))}")
-        await send_mc_command(f"/tp {bot2_name} {' '.join(map(str, arena.spawnCoords[1]))}")
-        
-        # Set spawn points at arena positions
-        await send_mc_command(f"/spawnpoint {bot1_name} {' '.join(map(str, arena.spawnCoords[0]))}")
-        await send_mc_command(f"/spawnpoint {bot2_name} {' '.join(map(str, arena.spawnCoords[1]))}")
-        
-        bot1.updateBot("fighting")
-        bot2.updateBot("fighting")
-        return {"status": "success", "arena": arena.name}
-    else:
-        return {"status": "error", "message": "No open arenas available"}
+
+    async with _match_lock:
+        bot1 = getBotByName(bot1_name)
+        bot2 = getBotByName(bot2_name)
+
+        if not bot1 or not bot2:
+            return {"status": "error", "message": "One or both bots not found"}
+
+        await fightBots(bot1, bot2)
+        return {"status": "success", "arena": getattr(bot1, 'arena', {})}
 
 @app.get("/game-state")
 async def get_game_state():
@@ -1796,7 +1869,7 @@ async def get_game_state():
             "status": bot.status,
             "pair": bot.pair.name if hasattr(bot, 'pair') and bot.pair != "NONE" else None,
             "arena": bot.arena.name if hasattr(bot, 'arena') and bot.arena else None,
-            "model_version": bot_model_mapping.get(bot.name, "0.1"),
+            "model_version": bot_model_mapping.get(bot.name, _DEFAULT_VERSION),
             "tick_count": bot_tick_counts.get(bot.name, 0),
             "tick_rate": tick_rate
         }

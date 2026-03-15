@@ -14,7 +14,19 @@ import net.famzangl.minecraft.minebot.ai.command.AIChatController;
  * Utility class for making HTTP requests to the backend API
  */
 public class APIClient {
-    private static final String BASE_URL = System.getProperty("cambium.api.url", "http://backend:8000");
+    private static final String BASE_URL = resolveBaseUrl();
+
+    private static String resolveBaseUrl() {
+        String url = System.getProperty("cambium.api.url");
+        if (url == null || url.isEmpty()) {
+            url = System.getenv("CAMBIUM_API_URL");
+        }
+        if (url == null || url.isEmpty()) {
+            url = "http://backend:8000";
+        }
+        System.out.println("[APIClient] BASE_URL = " + url);
+        return url;
+    }
     
     /**
      * Makes a POST request to the API

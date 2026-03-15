@@ -1,45 +1,39 @@
 #!/bin/bash
 ################################################################################
-# Cambium RL Training on Rosie
+# Cambium Experiment 2.3: Reward Shaping Ablation
 #
-# Starts the Minecraft server, FastAPI backend (GPU), and N headless clients
-# all on a single node.
+# Same as cambium.sbatch but with sparse rewards only (no shaping).
+# good_aim, proximity, pitch_control, aim_hold, extreme_pitch_penalty are
+# zeroed. Keeps: damage_dealt, damage_taken, won_duel, death, episode_timeout,
+# no_damage_penalty. Used to show that without dense shaping, the agent gets
+# no learning signal in early training (episodes timeout with zero combat).
 #
-# Usage (must set REPO_ROOT so paths resolve on the compute node):
-#   REPO_ROOT=$(pwd) sbatch rosie/cambium.sbatch
-#   REPO_ROOT=$(pwd) NUM_BOTS=6 sbatch rosie/cambium.sbatch
+# Usage:
+#   REPO_ROOT=$(pwd) sbatch rosie/cambium-sparse-reward.sbatch
 ################################################################################
 
-#SBATCH --job-name=cambium-rl
+#SBATCH --job-name=cambium-sparse-rew
 #SBATCH --partition=teaching
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:t4:1
-# Use more CPU cores per GPU so bots + backend have more headroom.
-# 32 should fit comfortably on T4 teaching nodes (≈72 logical CPUs total).
-# Adjust down if jobs sit pending for lack of resources.
-#SBATCH --cpus-per-gpu=36
+#SBATCH --cpus-per-gpu=16
 #SBATCH --mem=64G
-#SBATCH --time=1-0:0
-# SBATCH stdout/stderr (for early failures before RUN_DIR exists; main log is RUN_DIR/cambium.log)
-# Use relative path from cwd at submit time (repo root).
-#SBATCH --output=rosie/logs/slurm-%j.out
-#SBATCH --error=rosie/logs/slurm-%j.err
+#SBATCH --time=0-0:30
+#SBATCH --output=/dev/null
+#SBATCH --error=/dev/null
 
 set -euo pipefail
 
-# Ensure log dir exists so SLURM can write slurm-JOBID.out/err
-mkdir -p rosie/logs
-
 if [ -z "${REPO_ROOT:-}" ]; then
     echo "ERROR: REPO_ROOT is not set."
-    echo "Submit with:  REPO_ROOT=\$(pwd) sbatch rosie/cambium.sbatch"
+    echo "Submit with:  REPO_ROOT=\$(pwd) sbatch rosie/cambium-sparse-reward.sbatch"
     exit 1
 fi
 
 IMAGES_DIR="$REPO_ROOT/rosie/images"
 VENV_DIR="$REPO_ROOT/rosie/.venv"
 HMC_DIR="$REPO_ROOT/rosie/hmc"
-RUN_DIR="$REPO_ROOT/rosie/logs/${SLURM_JOB_ID}"
+RUN_DIR="$REPO_ROOT/rosie/logs/${SLURM_JOB_ID}_sparse_reward"
 SERVER_DIR="$REPO_ROOT/server"
 
 NUM_BOTS="${NUM_BOTS:-8}"
@@ -50,33 +44,27 @@ NODE_HOSTNAME=$(hostname)
 
 mkdir -p "$RUN_DIR"
 
-# Redirect all script output to our own log file (SLURM output goes to /dev/null)
 MAIN_LOG="$RUN_DIR/cambium.log"
 exec > "$MAIN_LOG" 2>&1
 
 echo "============================================="
-echo "  Cambium RL Training - Job $SLURM_JOB_ID"
+echo "  Cambium SPARSE REWARD Ablation - Job $SLURM_JOB_ID"
 echo "============================================="
 echo "  Node:       $NODE_HOSTNAME"
 echo "  Bots:       $NUM_BOTS"
+echo "  Reward mode: SPARSE (no proximity/aim/pitch shaping)"
 echo "  GPU:        $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A')"
 echo "  Start time: $(date)"
+echo "  Duration:   30 minutes"
 echo "============================================="
 echo ""
-echo "  >>> Run BOTH of these on your local machine to connect: <<<"
-echo ""
-echo "  1) Dashboard + MC server tunnel (one command):"
+echo "  >>> SSH tunnel: <<<"
 echo "     ssh -L ${BACKEND_PORT}:${NODE_HOSTNAME}:${BACKEND_PORT} -L ${MC_PORT}:${NODE_HOSTNAME}:${MC_PORT} msoe-hpc"
 echo ""
-echo "  2) Then open:"
-echo "     Dashboard:  http://localhost:${BACKEND_PORT}"
-echo "     Minecraft:  localhost:${MC_PORT}  (add as server in MC 1.8.9)"
-echo ""
-echo "  >>> Logs (run on Rosie): <<<"
-echo "     tail -f rosie/logs/${SLURM_JOB_ID}/cambium.log"
-echo "     tail -f rosie/logs/${SLURM_JOB_ID}/backend.log"
-echo "     tail -f rosie/logs/${SLURM_JOB_ID}/Bot1.log"
-echo ""
+echo "  >>> Logs (separate from other runs): <<<"
+echo "     rosie/logs/${SLURM_JOB_ID}_sparse_reward/"
+echo "     backend/logs/training_*_sparse_reward.csv"
+echo "     backend/logs/events_*_sparse_reward.log"
 echo "============================================="
 
 module load cuda/current openmpi/current singularity/current StdEnv
@@ -99,7 +87,6 @@ if [ ! -f "$VENV_DIR/bin/activate" ]; then
     exit 1
 fi
 
-# Track background PIDs for cleanup
 PIDS=()
 cleanup() {
     echo ""
@@ -123,7 +110,6 @@ echo "[1/$((NUM_BOTS + 2))] Starting Minecraft server..."
 MC_DATA_DIR="$REPO_ROOT/rosie/mc-data"
 mkdir -p "$MC_DATA_DIR"
 
-# Copy server data (world, properties, etc.) if not already present
 if [ ! -f "$MC_DATA_DIR/server.properties" ]; then
     echo "  Copying server data from $SERVER_DIR..."
     cp -r "$SERVER_DIR"/* "$MC_DATA_DIR/" 2>/dev/null || true
@@ -165,9 +151,9 @@ done
 echo "  MC server is ready!"
 
 # ================================================================
-#  2. Start FastAPI Backend (with GPU)
+#  2. Start FastAPI Backend (sparse reward ablation)
 # ================================================================
-echo "[2/$((NUM_BOTS + 2))] Starting FastAPI backend..."
+echo "[2/$((NUM_BOTS + 2))] Starting FastAPI backend (reward mode=sparse)..."
 
 . "$VENV_DIR/bin/activate"
 
@@ -175,6 +161,8 @@ RCON_HOST=localhost \
 RCON_PORT=$RCON_PORT \
 RCON_PASSWORD=minecraft \
 CAMBIUM_DEVICE=cuda \
+CAMBIUM_EXPERIMENT=sparse_reward \
+CAMBIUM_REWARD_MODE=sparse \
     python -m uvicorn main:app --host 0.0.0.0 --port "$BACKEND_PORT" \
     --app-dir "$REPO_ROOT/backend" \
     --no-access-log \
@@ -214,11 +202,8 @@ for i in $(seq 1 "$NUM_BOTS"); do
     BOT_RUN_DIR="$REPO_ROOT/rosie/bot-data/${BOT_NAME}"
     mkdir -p "$BOT_RUN_DIR/mods"
 
-    # Copy mods so the entrypoint can stage them into ~/.minecraft/mods
     cp -n "$REPO_ROOT"/headlessmc/mods/* "$BOT_RUN_DIR/mods/" 2>/dev/null || true
 
-    # Launch via pexpect-based Python launcher (mirrors Docker's expect entrypoint).
-    # pexpect creates a real PTY so stdin commands reach HeadlessMC properly.
     REPO_ROOT="$REPO_ROOT" \
     BOT_RUN_DIR="$BOT_RUN_DIR" \
     SERVER="$MC_SERVER" \
@@ -232,7 +217,6 @@ for i in $(seq 1 "$NUM_BOTS"); do
     PIDS+=("$BOT_PID")
     echo "  $BOT_NAME PID: $BOT_PID"
 
-    # Stagger launches so bots don't race on shared native extraction in ~/.minecraft
     if [ "$i" -lt "$NUM_BOTS" ]; then
         echo "  Waiting 15s before next bot..."
         sleep 15
@@ -241,21 +225,11 @@ done
 
 echo ""
 echo "============================================="
-echo "  All $NUM_BOTS bots launched!"
+echo "  Sparse reward ablation: All $NUM_BOTS bots launched!"
+echo "  No proximity/aim/pitch shaping (Section 6 / Exp 2.3)"
 echo "============================================="
-echo "  Logs (rosie/logs/${SLURM_JOB_ID}/):"
-echo "    MC server:  $RUN_DIR/mc-server.log"
-echo "    Backend:    $RUN_DIR/backend.log"
-echo "    Bot logs:   $RUN_DIR/Bot*.log"
-echo ""
-echo "  SSH tunnel (run on your local machine):"
-echo "    ssh -L ${BACKEND_PORT}:${NODE_HOSTNAME}:${BACKEND_PORT} -L ${MC_PORT}:${NODE_HOSTNAME}:${MC_PORT} msoe-hpc"
-echo ""
-echo "  Then open:"
-echo "    Dashboard:  http://localhost:${BACKEND_PORT}"
-echo "    Minecraft:  localhost:${MC_PORT}  (Minecraft 1.8.9 client)"
+echo "  Logs: rosie/logs/${SLURM_JOB_ID}_sparse_reward/"
+echo "  Data: backend/logs/*_sparse_reward.csv, *_sparse_reward.log"
 echo "============================================="
 
-# Wait for all background processes -- job stays alive until SLURM kills it
-# or all processes exit
 wait

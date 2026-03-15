@@ -27,8 +27,10 @@ def giveBotKit(bot):
     return kit.kitSetup
 
 def pairBot(bot: Bot):
+    if bot.pair != "NONE":
+        return 0
     for b in bots:
-        if b.pair == "NONE" and b != bot:
+        if b.pair == "NONE" and b != bot and b.status == "ready":
             bot.pairAgainst(b)
             return 1
     return 0

@@ -3,6 +3,7 @@ Fast RL Model - PPO with Multi-Discrete Action Space
 Actor-critic architecture with separate heads for each action component.
 Uses clipped surrogate objective, GAE advantages, and minibatch updates.
 """
+import os
 import torch
 import torch.nn as nn
 import numpy as np
@@ -72,7 +73,8 @@ class ActorCritic(nn.Module):
     def get_action_and_value(self, obs_np: np.ndarray, deterministic: bool = False):
         """Sample action, return (actions_dict, log_prob, value) — all scalars."""
         with torch.no_grad():
-            obs_t = torch.FloatTensor(obs_np).unsqueeze(0)
+            device = next(self.parameters()).device
+            obs_t = torch.FloatTensor(obs_np).unsqueeze(0).to(device)
             logits, value = self.forward(obs_t)
 
             actions = {}
@@ -81,7 +83,7 @@ class ActorCritic(nn.Module):
                 dist = torch.distributions.Categorical(logits=lg)
                 a = torch.argmax(lg, dim=-1).item() if deterministic else dist.sample().item()
                 actions[key] = a
-                log_probs.append(dist.log_prob(torch.tensor(a)))
+                log_probs.append(dist.log_prob(torch.tensor(a, device=device)))
 
             total_lp = sum(log_probs).item()
             return actions, total_lp, value.item()
@@ -145,11 +147,15 @@ class FastRLAgent:
     PPO_EPOCHS = 4
     MINIBATCH_SIZE = 64
 
+    # Reward types that are zeroed in sparse mode (ablation: no shaping)
+    SPARSE_ZERO_TYPES = frozenset({'good_aim', 'proximity', 'pitch_control', 'aim_hold', 'extreme_pitch_penalty'})
+
     def __init__(self, observation_dim: int, device: str = 'cpu', hidden_dim: int = 256):
         self.observation_dim = observation_dim
         self.device = device
         self.net = ActorCritic(observation_dim, hidden_dim).to(device)
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=self.LR, eps=1e-5)
+        self.reward_mode = os.getenv("CAMBIUM_REWARD_MODE", "shaped")  # "sparse" = no shaping (ablation 2.3)
 
         # Per-bot rollout buffers (keyed by bot_name)
         self._buffers: Dict[str, _BotBuffer] = {}
@@ -257,7 +263,35 @@ class FastRLAgent:
         buf.reward_types.append({})
         buf.dones.append(False)
 
-        # Update flat accessors so main.py len checks still work
+        self.observations = buf.observations
+        self.reward_types = buf.reward_types
+
+        return mc_action
+
+    def random_action(self, observation: Dict, action_space: Dict,
+                      bot_name: str = "default") -> Dict:
+        """Sample a uniformly random action; record to buffer like predict_action."""
+        import random as _rng
+        obs_vec = self._observation_to_vector_fast(observation, action_space)
+
+        actions_dict = {
+            'movement': _rng.randint(0, 8),
+            'jump': _rng.randint(0, 1),
+            'attack': _rng.randint(0, 1),
+            'yaw': _rng.randint(0, len(YAW_BINS) - 1),
+            'pitch': _rng.randint(0, len(PITCH_BINS) - 1),
+        }
+        mc_action = self._actions_dict_to_minecraft(actions_dict, action_space)
+
+        buf = self._buf(bot_name)
+        buf.observations.append(obs_vec)
+        buf.actions.append(actions_dict)
+        buf.log_probs.append(torch.tensor(0.0))
+        buf.values.append(torch.tensor(0.0))
+        buf.rewards.append(0.0)
+        buf.reward_types.append({})
+        buf.dones.append(False)
+
         self.observations = buf.observations
         self.reward_types = buf.reward_types
 
@@ -312,6 +346,10 @@ class FastRLAgent:
             amt = 0.0
         elif et == 'yaw_exploration':
             amt = 0.0
+
+        # Ablation: sparse mode zeros shaping rewards and omit from logs (return None so add_reward doesn't record)
+        if getattr(self, 'reward_mode', 'shaped') == 'sparse' and et in self.SPARSE_ZERO_TYPES:
+            return (None, 0.0)
         return et, amt
 
     def add_reward(self, bot_name: str, current_state: Dict, events: List[Dict]):
