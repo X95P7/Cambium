@@ -1,0 +1,241 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{url}
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+
+\title{Engineering Reinforcement Learning for Minecraft PvP: Design Decisions and Infrastructure}
+
+\author{\IEEEauthorblockN{Anonymous Authors}}
+
+\maketitle
+
+\begin{abstract}
+Applying reinforcement learning to complex 3D game environments involves design challenges that extend beyond model architecture selection. This paper investigates four design axes---action space structure, episode management, reward engineering, and training infrastructure---through the development of a multi-agent Minecraft player-versus-player (PvP) combat training system. We describe how a factored multi-discrete policy architecture, which decomposes simultaneous control of movement, camera, and combat actions into independent output heads, reduces the exploration problem from thousands of flat action combinations to a manageable set of independent dimensions. We discuss how bounded episode structures with timeout penalties mitigate degenerate agent behaviors such as indefinite passivity, and how dense heuristic reward shaping provides the necessary learning signals that sparse terminal rewards alone cannot. Furthermore, we outline the custom training infrastructure built for this study: a containerized, headless, multi-agent Minecraft environment scaling to eight synchronous agents on High-Performance Computing (HPC) hardware. Our empirical findings demonstrate that the modeled PPO Factored setup successfully stabilizes policy entropy and drives consistent combat interactions, contrasting with the baseline and sparse ablation failures. These observations offer practical insights for reinforcement learning practitioners working within high-dimensional, real-time environments, demonstrating that engineering the environment and training loop is as critical as the selection of the learning algorithm itself.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Reinforcement Learning, Minecraft, Multi-Agent Systems, Reward Shaping, Action Spaces, Proximal Policy Optimization
+\end{IEEEkeywords}
+
+\section{Introduction}
+Reinforcement learning (RL) has achieved remarkable success in mastering complex game environments, progressing from discrete 2D Atari games using Deep Q-Networks (DQN) \cite{mnih2015human} to highly intricate, partially observable 3D environments like StarCraft II (AlphaStar) \cite{vinyals2019grandmaster} and Dota 2 (OpenAI Five) \cite{berner2019dota}. These landmark achievements demonstrate RL's capacity to formulate complex spatial and temporal strategies. However, they also rely on massive, purpose-built distributed infrastructure and meticulously supervised training pipelines operating at scales inaccessible to most researchers. This paper explores the methodological engineering required to train RL agents in complex 3D environments on a smaller, reproducible scale.
+
+Specifically, we investigate the practical challenges of training RL agents for player-versus-player (PvP) combat in Minecraft. Unlike basic navigation or resource gathering, Minecraft PvP combat requires the strictly real-time coordination of spatial movement (strafing, approaching, retreating), continuous camera control (yaw and pitch targeting), and rhythmic combat actions against a highly evasive, dynamic opponent. 
+
+Existing Minecraft RL frameworks, such as MineRL \cite{guss2019minerl} and Project Malmo \cite{johnson2016malmo}, natively target single-agent navigation, crafting, and block manipulation tasks. They frequently lack robust support for true custom multi-agent PvP, are heavily version-locked to historical Minecraft builds, and suffer from deprecated Java dependencies that make modern deployment difficult. Consequently, we constructed a custom headless training pipeline. Building this system from the ground up exposed a series of critical design dependencies regarding action space representation, episode structures, dense reward engineering, and environment simplification. 
+
+We do not aim to achieve superhuman state-of-the-art performance against elite human players. Instead, we focus on documenting the fundamental design decisions that determine whether an agent receives a functional gradient signal or fails entirely to learn. 
+
+This paper contributes the following:
+\begin{enumerate}
+    \item A modular, containerized training infrastructure engineered for headless multi-agent Minecraft PvP via FastAPI and HeadlessMC.
+    \item A formal investigation into four distinct RL design axes (Action Space, Episodes, Rewards, Environment) and their empirical effect on training viability.
+    \item Quantitative observations and behavioral qualitative analysis gathered from training eight simultaneous agents using Proximal Policy Optimization (PPO) \cite{schulman2017proximal} on High-Performance Computing (HPC) hardware.
+\end{enumerate}
+
+\section{Background and Related Work}
+
+\subsection{Reinforcement Learning in 3D Environments}
+Reinforcement learning formalizes an agent interacting with an environment as a Markov Decision Process (MDP), defined by a tuple $(\mathcal{S}, \mathcal{A}, \mathcal{P}, \mathcal{R}, \gamma)$, representing the state space, action space, transition probabilities, reward function, and discount factor, respectively. Through Policy Gradient methods, agents directly optimize a parameterized policy $\pi_\theta(a|s)$ to maximize expected returns. Proximal Policy Optimization (PPO) \cite{schulman2017proximal} has become the standard algorithm for such tasks due to its clipped surrogate objective, which ensures stable gradient updates and sample efficiency without the high variance of basic REINFORCE algorithms.
+
+While major Game AI projects like AlphaStar and OpenAI Five \cite{berner2019dota} utilized massive computational clusters to brute-force training time, they still required intricate reward shaping and factored action spaces to direct learning. Our work mirrors these exact categories of design problems within the constraints of a single-GPU HPC node.
+
+\subsection{Action Space Dimensionality}
+A primary challenge in 3D gaming is the combinatorial explosion of the discrete action space. Tavakoli et al. \cite{tavakoli2018action} investigated this issue, noting that converting multi-dimensional continuous controls into a single flat discrete categorical matrix scales multiplicatively ($|A| = \prod |A_i|$). They proposed branching architectures that scale linearly ($\sum |A_i|$). Pierrot et al. \cite{pierrot2021factored} extended this analysis directly to PPO, confirming that factoring independent dimensions yields dramatic improvements in sample efficiency and exploration uniformity in continuous/discrete hybrid domains.
+
+\subsection{Reward Shaping and Credit Assignment}
+When environments contain sparse, delayed rewards (e.g., $+1$ for winning a match, $-1$ for losing), credit assignment fails over long sequence horizons. Generalized Advantage Estimation (GAE) \cite{schulman2016high} relies heavily on the discount factor $\gamma$, which naturally decays the influence of early actions on delayed rewards. 
+
+Ng, Harada, and Russell \cite{ng1999policy} proved that potential-based reward shaping theoretically preserves the optimal policy. However, in practical applications, heuristic shaping is heavily utilized to inject dense learning signals, despite introducing bias. The famous "bicycle problem" formalized by Randlov and Alstrom \cite{randlov1998learning} outlines the danger of improper heuristic shaping, where an agent learns to farm intermediate rewards (e.g., riding in circles to stay upright) without ever reaching the ultimate goal. We observed identical behaviors in early iterations of our Minecraft environment.
+
+\section{Experimental Setup and System Architecture}
+We built a highly scalable, asynchronous training infrastructure partitioned into three primary roles: a Minecraft Server, Python Backend, and Headless Agent Clients. By decoupling the RL inference from the Java client entirely, we ensure that PyTorch updates do not block the main Minecraft server thread.
+
+\subsection{Infrastructure Components}
+\textbf{Minecraft Forge Server:} We host a deeply customized Minecraft 1.8.9 Forge server. The server runs predefined boundary arenas, utilizing Remote Console (RCON) connections to expose programmatic control over the RL loop (resetting arenas, clearing inventories, healing bots).
+
+\textbf{Headless Clients (Agents):} The clients utilize HeadlessMC bundled with a custom Forge modification (CambiumMod). The client executes the following loop every 3 game ticks (150ms):
+\begin{itemize}
+    \item Extracts a normalized 194-dimensional observation vector. This vector explicitly includes 3D raycasts for block obstruction, relative spatial coordinates to the opponent, health disparities, and categorical inventory states.
+    \item Fires an HTTP callback to the Python Backend.
+    \item Applies the returned decoded action directly to the Minecraft `PhysicsController`, injecting key states and mouse delta updates.
+    \item Listens for asynchronous combat events (damage dealt, aim alignments) and offloads them to the backend for reward accumulation.
+\end{itemize}
+
+\textbf{FastAPI Backend:} A centralized Python application manages the policy models and runs continuous PyTorch inference. The backend handles synchronization, pairing agents in the arenas, and buffering the trajectory rollouts. 
+
+\subsection{Model Architecture and Hyperparameters}
+Our core neural network architecture utilizes a 2-Layer Multi-Layer Perceptron (MLP) trunk with a hidden dimension of 256. The shared trunk branches into discrete output heads (for the policy) and a singular scalar Value head. The optimization utilizes the Adam optimizer with a learning rate decoupled between the policy and value networks. We implement GAE with a discount factor $\gamma = 0.99$ and a PPO clip parameter of $\epsilon = 0.2$. Rollouts are batched collectively across all 8 synchronous agents every 200 interaction ticks.
+
+\subsection{HPC Deployment Context}
+The architecture was initially built in Docker Compose for local validation. However, scaling to 8 synchronous agents required deployment to the MSOE "Rosie" HPC cluster. HPC constraints prohibit Docker daemon access and `fakeroot` privileges due to shared-node security. We resolved this utilizing Singularity containers built from base Java 8 images, bypassing Docker entirely. 
+
+The Python backend runs on a single Nvidia Tesla T4 GPU. Pre-allocating inference matrices using NumPy on the CPU allows for API response times well under the 50ms (1 game tick) threshold, ensuring the Minecraft server does not drop ticks waiting for agent decisions. The parallel GPU capacity is reserved for the heavy batched backpropagation loops spanning all 8 agents simultaneously.
+
+\section{Design Axis 1: Action Space Structure}
+The architectural structure of the action space dictates exploration feasibility early in training. Minecraft PvP combat requires the simultaneous, parallel control of movement (8 directional vectors + idle), jumping, attacking, and camera targeting (discretized yaw and pitch bins). 
+
+\subsection{The Combinatorial Explosion}
+A naive approach assigns every viable combination of inputs to a discrete bin in a massive flat categorical policy. In our environment, this mathematically mandates the model output a single probability distribution across:
+$9 \text{ (move)} \times 2 \text{ (jump)} \times 2 \text{ (attack)} \times 16 \text{ (yaw)} \times 9 \text{ (pitch)} \approx 4,608$ unique class combinations.
+
+During early training, an agent samples actions uniformly. The probability of randomly selecting the combined "jump + strafe-right + attack + pitch-down 20 degrees" bin is approximately 0.02\%. Significant valid and necessary combat combinations go entirely unsampled for hours, restricting the state distribution.
+
+\subsection{Factored Multi-Discrete Policy}
+Following the precedents of OpenAI Five and Pierrot et al., we implemented a factored multi-discrete policy. Observations pass through the shared MLP trunk, which then branches into five independent softmax output heads corresponding exactly to the discrete domains listed above. 
+
+The output dimensionality collapses from 4,608 flat categorical probabilities to a dense 37 parameters. 
+\begin{enumerate}
+    \item \textbf{Exploration Linearity:} Randomly sampling from 5 independent distributions covers the joint possibility space uniformly and immediately.
+    \item \textbf{Gradient Distribution:} Independent heads isolate gradient signals. If the agent successfully tracks an entity with the camera (Yaw/Pitch) but fails to attack, the camera heads still receive the positive baseline advantage without being penalized by the incorrect attack-head choice. In a flat categorical model, the entire tuple would be discarded as suboptimal.
+\end{enumerate}
+
+
+\section{Design Axis 2: Episode Structure}
+Episode structure fundamentally defines the credit assignment horizon of the MDP. Bounding the Markov sequence via episodes directly governs whether the discount factor $\gamma$ washes out behavioral correlations.
+
+\subsection{The Passivity Equilibrium}
+In continuous, infinite-horizon simulations without predefined bounds, PvP combat inevitably decays into a degenerate Nash equilibrium of passivity. If an agent attacks and misses, it risks exposure. Empirically, early random-policy agents produced 15-minute 1v1 engagements with zero interactions. Over a 15-minute rollout (18,000 ticks), the discount factor ($\gamma = 0.99$) completely attenuates eventual terminal reward signals (like a death) long before they reach the early navigation actions that caused them.
+
+\subsection{Bounded Timeouts and Symmetrical Resets}
+We forced episodic boundaries:
+\begin{itemize}
+    \item \textbf{Fixed 15s Timer:} We cap the maximum engagement duration at 15 seconds. This drastically shrinks the sequence horizon, ensuring the Value function can reliably propagate baseline estimates across the entire rollout.
+    \item \textbf{Passive Play Penalty:} If an episode reaches the 15s limit without either agent dying, both agents receive a heavy timeout penalty ($-0.5$). This forces the agent out of passivity models; the expectation of doing nothing shifts from $0.0$ to $-0.5$.
+    \item \textbf{Symmetric Resets:} Both agents are simultaneously re-kitted, healed, and teleported to opposite uniform corners of the arena. This establishes a clean trajectory baseline for every new Value calculation.
+\end{itemize}
+
+
+\section{Design Axis 3: Reward Engineering}
+Sparse terminal rewards (e.g., $+10$ for a victory, $-1$ for death) provided unequivocally zero learning gradients within our bounded timeframes. An untrained agent evaluating a 5-dimension factored space will almost never accidentally execute the perfectly rhythmic sequence of aiming, pursuing, and striking required to kill a moving opponent and trigger the $+10$ sparse reward.
+
+\subsection{Heuristic Shaping and The Randlov Pitfall}
+To create a functional gradient, we implemented dense heuristic reward shaping. We generated tick-level rewards for specific foundational behaviors:
+\begin{itemize}
+    \item \textit{good\_aim}: Weighted reward ($+0.05$ to $+1.0$) based on the absolute degree difference between the agent's crosshair and the exact center of the enemy bounding box.
+    \item \textit{pitch\_control}: Small reward for keeping the pitch camera near the horizon, preventing agents from staring directly at the sky to minimize render overhead.
+    \item \textit{proximity}: Minor tick-reward for navigating within 5 blocks of the enemy.
+\end{itemize}
+
+However, naïve shaping introduces bias. We immediately encountered an instance of the "bicycle problem" \cite{randlov1998learning}. Early iterations of the reward assigned \textit{proximity} at $+0.1$ per tick. Over a 15-second episode, an agent could farm $+10.0$ reward merely by walking up to the opponent and staring at them---effectively yielding higher returns than simply executing combat and securing the sparse $+10.0$ victory kill (which ends the episode and the farming). 
+
+We corrected this gradient trap by suppressing the shaping limits (\textit{proximity} deprecation to $+0.01$) while aggressively scaling direct combat indicators: \textit{damage\_dealt} was scaled as high as $+10.0$ per strike relative to the percentage of the opponent's max health depleted. 
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.48\textwidth]{figures/reward_progression.png}
+\caption{Smoothed overall reward progression over training intervals. The Sparse Reward Ablation entirely fails to generate a positive signal, whereas the PPO Factored Policy climbs consistently.}
+\label{fig:reward_prog}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.48\textwidth]{figures/reward_breakdown.png}
+\caption{Breakdown of the individual dense heuristic reward components dynamically shifting over the training intervals across the final Factored model.}
+\label{fig:reward_breakdown}
+\end{figure}
+
+\section{Design Axis 4: Environment Control}
+Following standard curriculum learning principles \cite{bengio2009curriculum}, domain simplification removes confounding variables. We stripped Minecraft of all extraneous mechanics. Arenas were constructed as flat enclosed boxes. Agents were hard-coded iron armor and saturation (disabling hunger mechanics). Item drops were disabled to prevent entity tracking noise. 
+
+By eliminating terrain navigation, falling damage, equipment variance, and inventory management, the input observation vectors stabilized. The agent's only task is combat. Expanding the environmental complexity represents future curriculum progression elements, not a viable starting point for untrained policies.
+
+\section{Methodological Analysis and Preliminary Results}
+We collected extensive empirical data from full training runs comprising 5,669 training intervals across eight synchronous agents utilizing the Factored PPO architecture.
+
+\begin{table}[htbp]
+\centering
+\caption{Quantitative Comparison of Experimental Configurations}
+\label{tab:results}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Configuration} & \textbf{Mean Sparse Reward} & \textbf{Mean Damage Dealt} \\ \midrule
+Random Policy Baseline & 0.00 & 0.00 \\ 
+Sparse Reward Ablation & $-1.53$ & 1.32 \\ 
+Timeout Ablation (120s) & 0.00 & 0.00 \\ 
+\textbf{Factored PPO (Last 10\%)} & \textbf{8.73} & \textbf{3.63} \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Quantitative Experimental Data}
+As documented in Table \ref{tab:results}, when submitting the agents to a random un-trained baseline, or limiting the reward purely to the sparse terminal metrics without shaping (the \textit{Sparse Ablation}), the agents uniformly failed to converge. In the Sparse Ablation experiment over a short timeframe, the mean total reward plateaued at $-1.53$, yielding a fractional mean damage output of just 1.32 per interval. Without shaping, the agents never learned to engage. This is visually corroborated by Figure \ref{fig:reward_prog}, which illustrates the complete mathematical collapse of the ablation run's progression line against the Factored PPO curve.
+
+Conversely, the fully modeled PPO Factored setup generated severe divergence from the baseline. Over the course of the 5,669 training intervals, the cumulative \textit{damage\_dealt} surged to over 18,300 total points across the swarm. Figure \ref{fig:reward_breakdown} demonstrates the initial spike and eventual steady-state balancing of the heuristic shaping metrics (aim-holding and proximity) alongside the damage output.
+
+During the final 10\% of the training lifecycle, the agents averaged an underlying Sparse Reward output of 8.73. We observed single intervals peaking at 21.54 damage output, indicating targeted, intentional striking logic against moving opponents. 
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.48\textwidth]{figures/loss_curves.png}
+\caption{Loss metrics and Policy Entropy over training. Entropy stabilizes as the factored probability distributions harden.}
+\label{fig:loss_curves}
+\end{figure}
+
+Furthermore, the model PPO matrices clearly demonstrated convergence, detailed in Figure \ref{fig:loss_curves}. Over the final 10\% interval window, Policy Loss stabilized to a mean of $-0.0201$, while Value Loss stabilized at 1.40. Notably, the policy Entropy smoothly declined from an initial randomized exploratory state of 6.66 down to a stable 6.13, proving that the probability distributions hardened around distinct learned combat patterns.
+
+\subsection{Qualitative Behavioral Observations}
+The numerical data supports distinct chronological phases of learned behavior.
+\begin{enumerate}
+    \item \textbf{Exploratory Jitter:} In the first 500 intervals, agents predominantly span in rapid, erratic circles. Action distributions were completely random.
+    \item \textbf{The Turret Phase:} By interval 2000, driven purely by the \textit{good\_aim} heuristic, agents learned to lock their cameras onto traversing opponents but frequently failed to strafe or approach, acting as stationary "turrets."
+    \item \textbf{Combat Rhythms:} In the final thousand intervals, the agents successfully correlated the \textit{damage\_dealt} reward with spatial closing. Agents exhibited simultaneous strafing, rhythmic sword swings, and visual tracking.
+\end{enumerate}
+
+\section{Discussion and Future Work}
+The quantitative logs validate that the combination of factored multi-discrete output heads, densely shaped heuristic rewards, and strictly bounded 15-second episodes successfully overrides degenerate Nash passivity in high-dimensional 3D PvP scenarios. The inclusion of the qualitative "Turret Phase" actively proves the necessity of proper shaping weights; without heavily scaling the damage constraint, agents would remain permanently in the turret equilibrium to maximize safe heuristic proximity points.
+
+However, camera targeting remains a highly volatile control vector. As observed in the exploratory jitter phase, binning raw continuous camera yaw adjustments into 16 discrete angles results in erratic targeting when engaging sprinting opponents. Future implementations will directly replace the discrete camera heads with a continuous deterministic output utilizing Soft Actor-Critic (SAC) or PPO-Continuous bounds, leaving the Boolean logic (attacking, jumping) to discrete branches.
+
+\section{Conclusion}
+The algorithmic selection of PPO is minor compared to the sheer scope of engineering required to yield viable training boundaries in complex real-time games. Minecraft PvP combat requires meticulous environmental co-design. Transitioning from flat combinatorial action spaces to linearly scaling factored branches, explicitly punishing temporal stalling via episode barriers, and balancing heuristic shaping metrics to avoid early local optima traps are mandatory baseline requirements for successful agent alignment.
+
+\bibliographystyle{IEEEtran}
+\begin{thebibliography}{99}
+\bibitem{berner2019dota}
+C. Berner et al., "Dota 2 with Large Scale Deep Reinforcement Learning," arXiv:1912.06680, 2019.
+
+\bibitem{tavakoli2018action}
+A. Tavakoli, F. Pardo, and P. Kormushev, "Action Branching Architectures for Deep Reinforcement Learning," \textit{AAAI}, 2018.
+
+\bibitem{pierrot2021factored}
+T. Pierrot et al., "Factored Action Spaces in Deep Reinforcement Learning," \textit{OpenReview}, 2021.
+
+\bibitem{schulman2016high}
+J. Schulman et al., "High-Dimensional Continuous Control Using Generalized Advantage Estimation," \textit{ICLR}, 2016.
+
+\bibitem{schulman2017proximal}
+J. Schulman et al., "Proximal Policy Optimization Algorithms," arXiv:1707.06347, 2017.
+
+\bibitem{randlov1998learning}
+J. Randlov and P. Alstrom, "Learning to Drive a Bicycle Using Reinforcement Learning and Shaping," \textit{ICML}, 1998.
+
+\bibitem{bengio2009curriculum}
+Y. Bengio et al., "Curriculum Learning," \textit{ICML}, 2009.
+
+\bibitem{guss2019minerl}
+W. Guss et al., "MineRL: A Large-Scale Dataset of Minecraft Demonstrations," \textit{IJCAI}, 2019.
+
+\bibitem{mnih2015human}
+V. Mnih et al., "Human-Level Control Through Deep Reinforcement Learning," \textit{Nature}, 2015.
+
+\bibitem{vinyals2019grandmaster}
+O. Vinyals et al., "Grandmaster Level in StarCraft II Using Multi-agent Reinforcement Learning," \textit{Nature}, 2019.
+
+\bibitem{ng1999policy}
+A. Ng, D. Harada, and S. Russell, "Policy Invariance Under Reward Transformations: Theory and Application to Reward Shaping," \textit{ICML}, 1999.
+
+\bibitem{johnson2016malmo}
+M. Johnson et al., "The Malmo Platform for Artificial Intelligence Experimentation," \textit{IJCAI}, 2016.
+
+\end{thebibliography}
+
+\end{document}

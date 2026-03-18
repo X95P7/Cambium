@@ -15,6 +15,11 @@ services:
     volumes:
       - ./server:/data
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 
   backend:
@@ -26,6 +31,11 @@ services:
     depends_on:
       - mc-forge
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - /var/run/docker.sock:/v
       - ./backend/models:/app/models
@@ -58,6 +68,11 @@ services:
       - headlessmc-data:/opt/hmc/HeadlessMC
       # Separate game directory for each bot
       - headlessmc1-gamedir:/opt/hmc/run
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 
   headlessmc2:
@@ -80,6 +95,11 @@ services:
       - headlessmc-data:/opt/hmc/HeadlessMC
       # Separate game directory for each bot
       - headlessmc2-gamedir:/opt/hmc/run
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 
 

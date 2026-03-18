@@ -21,7 +21,8 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
  */
 public class RewardListener {
     
-    // Track previous health to detect damage taken
+    // Set -Dcambium.debug.rewards=true to enable verbose reward logging
+    private static final boolean DEBUG_REWARDS = Boolean.getBoolean("cambium.debug.rewards");
     private float lastHealth = -1.0f;
     private long lastDamageTakenTime = 0;
     private static final long DAMAGE_COOLDOWN_MS = 25; // 25ms cooldown between damage events
@@ -79,7 +80,7 @@ public class RewardListener {
             }
             events.add(damageEvent);
             
-            System.out.println("[RewardListener] [EVENT] Bot " + botName + " took " + damage + " damage");
+            if (DEBUG_REWARDS) System.out.println("[RewardListener] [EVENT] Bot " + botName + " took " + damage + " damage");
             sendRewardEvents(events);
             
             lastHealth = player.getHealth() - damage;
@@ -110,7 +111,7 @@ public class RewardListener {
                 damageEvent.addProperty("target", entity.getName());
                 events.add(damageEvent);
                 
-                System.out.println("[RewardListener] [EVENT] Bot " + botName + " dealt " + damage + " damage (" + (damagePercentage * 100) + "%) to " + entity.getName());
+                if (DEBUG_REWARDS) System.out.println("[RewardListener] [EVENT] Bot " + botName + " dealt " + damage + " damage (" + (damagePercentage * 100) + "%) to " + entity.getName());
                 sendRewardEvents(events);
                 
                 lastAttackedEntity = entity;
@@ -268,7 +269,7 @@ public class RewardListener {
             events.add(damageEvent);
             
             String botName = player.getName();
-            System.out.println("[RewardListener] [TICK] Bot " + botName + " took " + damage + " damage (health: " + lastHealth + " -> " + currentHealth + ")");
+            if (DEBUG_REWARDS) System.out.println("[RewardListener] [TICK] Bot " + botName + " took " + damage + " damage (health: " + lastHealth + " -> " + currentHealth + ")");
             sendRewardEvents(events);
         }
         
@@ -330,7 +331,7 @@ public class RewardListener {
                 damageEvent.addProperty("target", target.getName());
                 events.add(damageEvent);
                 
-                System.out.println("[RewardListener] [TICK] Bot " + player.getName() + " dealt " + damage + " damage (" + (damagePercentage * 100) + "%) to " + target.getName() + " (health: " + lastAttackedEntityHealth + " -> " + currentTargetHealth + ")");
+                if (DEBUG_REWARDS) System.out.println("[RewardListener] [TICK] Bot " + player.getName() + " dealt " + damage + " damage (" + (damagePercentage * 100) + "%) to " + target.getName() + " (health: " + lastAttackedEntityHealth + " -> " + currentTargetHealth + ")");
                 sendRewardEvents(events);
             }
         }
@@ -457,7 +458,7 @@ public class RewardListener {
                 System.err.println("[RewardListener] FAILED to send reward events for " + botName + ". Response was null. Check API connection.");
                 AIChatController.addChatLine("Reward API Error: Request failed for " + botName);
             } else {
-                System.out.println("[RewardListener] Successfully sent " + events.size() + " reward event(s) for " + botName + ". Response: " + response);
+                if (DEBUG_REWARDS) System.out.println("[RewardListener] Successfully sent " + events.size() + " reward event(s) for " + botName + ". Response: " + response);
             }
         } catch (Exception e) {
             System.err.println("[RewardListener] Exception sending reward events: " + e.getMessage());

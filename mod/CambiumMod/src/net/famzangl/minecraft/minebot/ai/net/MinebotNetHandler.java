@@ -110,6 +110,7 @@ public class MinebotNetHandler extends NetHandlerPlayClient implements
 
 	private String lastSendTabComplete;
 
+	private static final int MAX_CHAT_MESSAGES = 500;
 	private final ArrayList<PersistentChat> chatMessages = new ArrayList<PersistentChat>();
 	private Minecraft mcIn;
 
@@ -302,6 +303,9 @@ public class MinebotNetHandler extends NetHandlerPlayClient implements
 		if (mcIn.isCallingFromMinecraftThread()) {
 			LOGGER.trace(MARKER_CHAT, "Received chat package: " + packetIn.hashCode() + ": " + packetIn.getChatComponent());
 			chatMessages.add(new PersistentChat(packetIn));
+			if (chatMessages.size() > MAX_CHAT_MESSAGES) {
+				chatMessages.subList(0, chatMessages.size() - (MAX_CHAT_MESSAGES / 2)).clear();
+			}
 		} // else: super passes it on to mc thread.
 		super.handleChat(packetIn);
 	}
