@@ -6,7 +6,7 @@ kitEnd = [""," minecraft:instant_health 1 255", " iron_sword 1 0", " fishing_rod
             " slot.armor.feet iron_boots 1 0 {Unbreakable:1,ench:[{id:0,lvl:2}]}"]
 """
 kitStart = ["/clear ", "/effect ", "/replaceitem entity ", "/replaceitem entity ", "/replaceitem entity ", "/replaceitem entity ", "/replaceitem entity "]
-kitEnd = [""," minecraft:instant_health 1 255",
+kitEnd = [""," minecraft:instant_health 1 5",
           " slot.hotbar.0 iron_sword 1 0",
           " slot.armor.head iron_helmet 1 0 {Unbreakable:1,ench:[{id:0,lvl:2}]}",
           " slot.armor.chest iron_chestplate 1 0 {Unbreakable:1,ench:[{id:0,lvl:2}]}",

@@ -61,8 +61,23 @@ rosie/logs/
 
 # Extra Generated Directories
 rosie/mc-data/
+rosie/mc-data-*/
+rosie/workdirs/
+rosie/HeadlessMC/
 rosie/images/
 rosie/hmc/
 mod/CambiumMod/build/
 mod/CambiumMod/.gradle/
+mod/CambiumMod/bin/
 models/
+
+# Training run artifacts
+backend/runs/
+
+# Minecraft server worlds and runtime data
+server/world/
+server/worldDefault/
+server/world_backup*/
+server/world_terrain_backup/
+server/logs/
+server/crash-reports/

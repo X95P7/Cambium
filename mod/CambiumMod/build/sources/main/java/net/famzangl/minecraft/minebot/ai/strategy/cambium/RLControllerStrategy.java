@@ -17,6 +17,7 @@ import net.famzangl.minecraft.minebot.ai.cambiumInputs.DataClasses.EntityData;
 import net.famzangl.minecraft.minebot.ai.cambiumInputs.DataClasses.InventoryData;
 import net.famzangl.minecraft.minebot.ai.cambiumInputs.DataClasses.PlayerData;
 import net.famzangl.minecraft.minebot.ai.cambiumInputs.GetInformation.GetBlocks;
+import net.famzangl.minecraft.minebot.ai.cambiumInputs.GetInformation.GetWallDistances;
 import net.famzangl.minecraft.minebot.ai.cambiumInputs.GetInformation.GetEntities;
 import net.famzangl.minecraft.minebot.ai.cambiumInputs.GetInformation.GetInventory;
 import net.famzangl.minecraft.minebot.ai.cambiumInputs.GetInformation.GetPlayer;
@@ -125,12 +126,9 @@ public class RLControllerStrategy extends AIStrategy {
         }
         
         if (observationConfig.includeBlockData) {
-            GetBlocks getBlocks = new GetBlocks(helper);
-            blocks = getBlocks.doRaytrace();
-            // Limit to maxBlocks
-            if (blocks != null && blocks.size() > observationConfig.maxBlocks) {
-                blocks = new ArrayList<BlockData>(blocks.subList(0, observationConfig.maxBlocks));
-            }
+            GetWallDistances getWalls = new GetWallDistances(helper);
+            blocks = getWalls.getWallDistances();
+            // Always exactly 8 entries (one per cardinal direction)
         }
         
         if (observationConfig.includeInventoryData) {

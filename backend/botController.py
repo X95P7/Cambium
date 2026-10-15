@@ -1,32 +1,19 @@
-import kits.kitBase as kit
+"""
+botController.py — Bot list management and pairing logic.
+"""
+
 from BotClass import Bot
 
 bots = []
 
-kitSetup = []
 
-def addBot(bot):
+def addBot(bot: Bot):
     bots.append(bot)
 
-def updateBots():
-    # Checks bot statuts
-    return 0
 
-def updateBot(name, status):
-    # Updates the status of a bot
-    bots[name] = status
-
-def printStatus():
-    # Prints the status of all bots
-    c = 0
-    for bot in bots:
-        c += 1
-        print(c + bot)
-
-def giveBotKit(bot):
-    return kit.kitSetup
-
-def pairBot(bot: Bot):
+def pairBot(bot: Bot) -> int:
+    """Find an unpaired ready bot and pair it with the given bot.
+    Returns 1 if paired, 0 if no partner available."""
     if bot.pair != "NONE":
         return 0
     for b in bots:

@@ -36,7 +36,7 @@ public class RewardListener {
     private long lastAimCheckTime = 0;
     private static final long AIM_CHECK_INTERVAL_MS = 100; // Check aim every 100ms
     private int consecutiveAimChecks = 0; // Require sustained aim (2+ checks) to reduce sweep-through rewards
-    private static final int AIM_SUSTAINED_THRESHOLD = 2; // Must be on target for 2 checks (~200ms) before rewarding
+    private static final int AIM_SUSTAINED_THRESHOLD = 1; // 1 check (~100ms) is enough
     
     // Track damage detection via tick
     private long lastDamageCheckTime = 0;

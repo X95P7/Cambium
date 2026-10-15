@@ -14,9 +14,14 @@ set -uo pipefail
 USERNAME="${USERNAME:-Player}"
 HMC_VERSION="${HMC_VERSION:-2.5.1}"
 MC_VERSION="${MC_VERSION:-1.8.9}"
-CAMBIUM_API_URL="${CAMBIUM_API_URL:-http://backend:8000}"
+CAMBIUM_API_URL="${CAMBIUM_API_URL:-http://localhost:8000}"
 
-cd /opt/hmc
+WORK_DIR="/tmp/hmc_workspace"
+mkdir -p "$WORK_DIR"
+cp /opt/hmc/"headlessmc-launcher-${HMC_VERSION}.jar" "$WORK_DIR/"
+cp /opt/hmc/config.properties "$WORK_DIR/" 2>/dev/null || touch "$WORK_DIR/config.properties"
+
+cd "$WORK_DIR"
 
 # HeadlessMC's ProcessFactory uses ~/.minecraft as the game directory.
 # Mods MUST be there — NOT in /opt/hmc/run/mods.
@@ -36,13 +41,14 @@ rm -f HeadlessMC/auth/.accounts.json 2>/dev/null || true
 echo "[entrypoint] Launching HeadlessMC for $USERNAME..."
 
 # exec replaces bash with Java — the PTY from pexpect passes straight through.
-# -D properties go BEFORE -jar since HeadlessMC uses in-memory launching.
-# -Xmx2G caps heap so 8 bots fit in ~20GB total.
+# We pass the API URL twice: once via system property before the jar,
+# and again via HeadlessMC's --jvm flag for child-process propagation.
 exec java \
     -Xms512M -Xmx2G \
     -Dhmc.check.xvfb=false \
     -Dhmc.offline.username="$USERNAME" \
     -Djava.awt.headless=true \
     -Dcambium.api.url="$CAMBIUM_API_URL" \
+    -Dcambium.url="$CAMBIUM_API_URL" \
     -jar "headlessmc-launcher-${HMC_VERSION}.jar" \
-    --command launch "forge:${MC_VERSION}" -offline
+    --command launch "forge:${MC_VERSION}" -offline --jvm "-Dcambium.api.url=$CAMBIUM_API_URL -Dcambium.url=$CAMBIUM_API_URL"

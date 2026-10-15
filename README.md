@@ -59,6 +59,9 @@ cd mod/CambiumMod
 # Linux/Mac:
 ./gradlew clean build
 
+# ROSIE
+JAVA_HOME=~/java/jdk8u422-b05 ./gradlew clean build
+
 # Windows (PowerShell):
 .\gradlew.bat clean build
 

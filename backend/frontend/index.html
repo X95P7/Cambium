@@ -99,6 +99,17 @@
         </div>
     </div>
 
+    <!-- Obs Modal -->
+    <div class="modal-overlay" id="obsModal">
+        <div class="modal" style="max-width:800px">
+            <h2 id="obsModalTitle">Observation</h2>
+            <div class="log-box" id="obsModalBody" style="white-space: pre-wrap; font-size: 0.85em; max-height: 50vh;"></div>
+            <div class="m-actions">
+                <button class="btn" style="background:#e5e7eb" onclick="closeObsModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <div class="stats-row" id="statsRow"></div>
 
     <!-- Chart window controls -->
@@ -126,7 +137,7 @@
 
     <!-- Bots & Arenas -->
     <div class="grid">
-        <div class="card"><h2>Bots</h2><table><thead><tr><th>Name</th><th>Status</th><th>Pair</th><th>Arena</th><th>Model</th><th>TPS</th></tr></thead><tbody id="botsTbody"><tr><td colspan="6" style="text-align:center;padding:20px;color:#667eea">Loading...</td></tr></tbody></table></div>
+        <div class="card"><h2>Bots</h2><table><thead><tr><th>Name</th><th>Status</th><th>Pair</th><th>Arena</th><th>Model</th><th>TPS</th><th>Action</th></tr></thead><tbody id="botsTbody"><tr><td colspan="7" style="text-align:center;padding:20px;color:#667eea">Loading...</td></tr></tbody></table></div>
         <div class="card"><h2>Arenas</h2><table><thead><tr><th>Name</th><th>Status</th><th>Spawns</th></tr></thead><tbody id="arenasTbody"><tr><td colspan="3" style="text-align:center;padding:20px;color:#667eea">Loading...</td></tr></tbody></table></div>
     </div>
 
@@ -331,8 +342,8 @@ function updateStats(stats) {
 
 function updateBots(bots) {
     const tb = document.getElementById('botsTbody');
-    if (!bots.length) { tb.innerHTML = '<tr><td colspan="6" style="text-align:center">No bots</td></tr>'; return; }
-    tb.innerHTML = bots.map(b => `<tr><td><strong>${b.name}</strong></td><td><span class="s-${b.status}">${b.status.toUpperCase()}</span></td><td>${b.pair||'—'}</td><td>${b.arena||'—'}</td><td>v${b.model_version}</td><td>${b.tick_rate.toFixed(1)}</td></tr>`).join('');
+    if (!bots.length) { tb.innerHTML = '<tr><td colspan="7" style="text-align:center">No bots</td></tr>'; return; }
+    tb.innerHTML = bots.map(b => `<tr><td><strong>${b.name}</strong></td><td><span class="s-${b.status}">${b.status.toUpperCase()}</span></td><td>${b.pair||'—'}</td><td>${b.arena||'—'}</td><td>v${b.model_version}</td><td>${b.tick_rate.toFixed(1)}</td><td><button class="btn btn-sm btn-primary" onclick="viewObservation('${b.name}')">View</button></td></tr>`).join('');
     charts.tps.data.labels = bots.map(b => b.name);
     charts.tps.data.datasets[0].data = bots.map(b => b.tick_rate);
     charts.tps.update('none');
@@ -457,6 +468,55 @@ function openModelModal() {
 }
 function closeModelModal() { document.getElementById('modelModal').classList.remove('active'); }
 
+function closeObsModal() { document.getElementById('obsModal').classList.remove('active'); }
+
+async function viewObservation(botName) {
+    const modal = document.getElementById('obsModal');
+    const title = document.getElementById('obsModalTitle');
+    const body = document.getElementById('obsModalBody');
+    
+    modal.classList.add('active');
+    title.textContent = `Observation: ${botName} (Fetching...)`;
+    body.innerHTML = '<div style="text-align:center;padding:20px;color:#667eea">Requesting latest state from backend...</div>';
+    
+    try {
+        const resp = await fetch(`${API}/bot/${botName}/observation`);
+        const data = await resp.json();
+        
+        if (data.status === 'error') {
+            body.innerHTML = `<div style="color:#ef4444;padding:12px">Error: ${data.message}</div>`;
+            return;
+        }
+
+        const timeStr = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : 'N/A';
+        title.innerHTML = `Observation: ${botName} <span style="font-size:0.6em;color:#9ca3af;margin-left:10px">Last Updated: ${timeStr}</span>`;
+        
+        // Enhance visibility for synthesized data
+        let jsonStr = JSON.stringify(data.raw_json || data, null, 2);
+        
+        // Highlight synthetic entities
+        if (data.raw_json && data.raw_json.entities) {
+            data.raw_json.entities.forEach(ent => {
+                if (ent.isSynthetic) {
+                    jsonStr = jsonStr.replace(JSON.stringify(ent, null, 2), `<span style="color:#f59e0b; font-weight:bold">// SYNTHETIC RELATIVE DATA\n</span><span style="border-left: 2px solid #f59e0b; padding-left: 8px; display:inline-block">${JSON.stringify(ent, null, 2)}</span>`);
+                }
+            });
+        }
+
+        body.innerHTML = jsonStr;
+
+        if (data.nn_target_vector_22) {
+             const vectorHtml = Object.entries(data.nn_target_vector_22).map(([k,v]) => 
+                `<div><span class="lm">${k.padEnd(16)}</span>: <span class="lv">${v.toFixed(4)}</span></div>`
+             ).join('');
+             body.innerHTML += `<div style="margin-top:20px; border-top:1px solid #444; padding-top:10px"><span class="section">Vectorized Input (22 dims)</span><div style="font-family:monospace">${vectorHtml}</div></div>`;
+        }
+        
+    } catch(e) {
+        body.innerHTML = '<div style="color:#ef4444;padding:12px">Error fetching observation: ' + e.message + '</div>';
+    }
+}
+
 async function loadModelList() {
     const container = document.getElementById('modelList');
     try {
@@ -519,6 +579,7 @@ async function resetModel() {
 document.addEventListener('click', e => {
     if (e.target.id === 'saveModal') closeSaveModal();
     if (e.target.id === 'modelModal') closeModelModal();
+    if (e.target.id === 'obsModal') closeObsModal();
 });
 
 window.addEventListener('DOMContentLoaded', () => {

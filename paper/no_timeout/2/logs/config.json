@@ -1,0 +1,31 @@
+{
+  "run_tag": "no_timeout_seed2",
+  "seed": 2,
+  "experiment_mode": "training",
+  "reward_mode": "shaped",
+  "no_train": false,
+  "no_timeout": true,
+  "self_play": true,
+  "self_play_swap_interval": 25,
+  "max_episode_length_sec": 15,
+  "backprop_timer_sec": 30,
+  "autosave_interval": 250,
+  "max_intervals": 0,
+  "restart_interval_hours": 2.0,
+  "reward_weights": {
+    "doing_damage": 10,
+    "taking_damage": -2,
+    "won_duel": 90.0,
+    "death": -20,
+    "episode_timeout": -10.0,
+    "no_damage_penalty": -10.0,
+    "good_aim": 0.1,
+    "proximity": 0.05,
+    "pitch_control": 0.05,
+    "aim_hold": 0.1,
+    "extreme_pitch_penalty": -0.05
+  },
+  "obs_dim": 22,
+  "hidden_dim": 256,
+  "timestamp": "2026-04-07T16:53:16.426670"
+}

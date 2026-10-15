@@ -98,9 +98,22 @@ cleanup() {
         fi
     done
     wait 2>/dev/null || true
+    pkill -f "HeadlessMC" 2>/dev/null || true
+    pkill -f "singularity exec" 2>/dev/null || true
+    pkill -f "minecraft-server" 2>/dev/null || true
     echo "[CLEANUP] Done."
 }
 trap cleanup EXIT INT TERM
+
+MAX_RESTARTS=20
+RESTART_COUNT=0
+
+while [ $RESTART_COUNT -lt $MAX_RESTARTS ]; do
+    echo ""
+    echo "============================================="
+    echo "  Starting Run Loop iteration: $((RESTART_COUNT + 1)) / $MAX_RESTARTS"
+    echo "============================================="
+    PIDS=()
 
 # ================================================================
 #  1. Start Minecraft Server
@@ -163,6 +176,7 @@ RCON_PASSWORD=minecraft \
 CAMBIUM_DEVICE=cuda \
 CAMBIUM_EXPERIMENT=sparse_reward \
 CAMBIUM_REWARD_MODE=sparse \
+CAMBIUM_MODELS_DIR="${RUN_DIR}/models" \
     python -m uvicorn main:app --host 0.0.0.0 --port "$BACKEND_PORT" \
     --app-dir "$REPO_ROOT/backend" \
     --no-access-log \
@@ -232,4 +246,10 @@ echo "  Logs: rosie/logs/${SLURM_JOB_ID}_sparse_reward/"
 echo "  Data: backend/logs/*_sparse_reward.csv, *_sparse_reward.log"
 echo "============================================="
 
-wait
+wait $BACKEND_PID || true
+    echo "[RESTART] Backend exited (likely 100-interval auto-restart). Cleaning up..."
+    cleanup
+    RESTART_COUNT=$((RESTART_COUNT + 1))
+    echo "Sleeping 10s before next iteration..."
+    sleep 10
+done

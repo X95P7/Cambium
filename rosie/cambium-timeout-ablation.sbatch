@@ -165,6 +165,7 @@ RCON_PASSWORD=minecraft \
 CAMBIUM_DEVICE=cuda \
 CAMBIUM_EXPERIMENT=timeout_ablation \
 CAMBIUM_EPISODE_TIMEOUT_SEC=$EPISODE_TIMEOUT_SEC \
+CAMBIUM_MODELS_DIR="${RUN_DIR}/models" \
     python -m uvicorn main:app --host 0.0.0.0 --port "$BACKEND_PORT" \
     --app-dir "$REPO_ROOT/backend" \
     --no-access-log \

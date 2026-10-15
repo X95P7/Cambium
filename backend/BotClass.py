@@ -1,25 +1,23 @@
+"""
+BotClass.py — Bot data class.
+"""
+
 from arena.arenaClass import Arena
 
-class Bot: 
-    def __init__(self, name, status, kit, agent):
+
+class Bot:
+    def __init__(self, name: str, status: str, kit, agent: str):
         self.name = name
         self.status = status
         self.kit = kit
         self.agent = agent
-        self.pair: Bot = "NONE"
+        self.pair: "Bot" = "NONE"
         self.arena = ""
 
-    def updateBot(self, status):
+    def updateBot(self, status: str):
         self.status = status
 
-    def printStatus(self):
-        print(self.name + self.status)
-    
-    def clear():
-        return "/clear name"
-        
-    #This should be able to take multiple pairs soon
-    def pairAgainst(self, partner):
+    def pairAgainst(self, partner: "Bot"):
         self.pair = partner
         partner.pair = self
 

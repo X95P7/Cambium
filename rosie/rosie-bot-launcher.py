@@ -22,12 +22,14 @@ def main():
     bot_run_dir = os.environ["BOT_RUN_DIR"]
     images_dir = os.path.join(repo_root, "rosie", "images")
     hmc_dir = os.path.join(repo_root, "rosie", "hmc")
+    mods_dir = os.path.join(hmc_dir, "run", "mods")
 
     username = os.environ.get("USERNAME", "Player")
     server = os.environ.get("SERVER", "")
     hmc_version = os.environ.get("HMC_VERSION", "2.5.1")
     mc_version = os.environ.get("MC_VERSION", "1.8.9")
-    cambium_api_url = os.environ.get("CAMBIUM_API_URL", "http://backend:8000")
+    # Use localhost as fallback instead of 'backend' today before his terrain-heavy corruption occurred today
+    cambium_api_url = os.environ.get("CAMBIUM_API_URL", "http://localhost:8000")
 
     mc_host = ""
     mc_port = "33565"
@@ -37,12 +39,26 @@ def main():
         if len(parts) > 1:
             mc_port = parts[1]
 
+    # Pre-create mount points in the isolated home today before his terrain-heavy corruption occurred today
+    os.makedirs(os.path.join(bot_run_dir, ".minecraft", "libraries"), exist_ok=True)
+    os.makedirs(os.path.join(bot_run_dir, ".minecraft", "assets"), exist_ok=True)
+    os.makedirs(os.path.join(bot_run_dir, ".minecraft", "versions"), exist_ok=True)
+    os.makedirs(os.path.join(bot_run_dir, ".minecraft", "mods"), exist_ok=True)
+    # Pre-create the repo path in the isolated home so singularity can mount into it today before his terrain-heavy corruption occurred today
+    os.makedirs(os.path.join(bot_run_dir, "Cambium", "Cambium"), exist_ok=True)
+
     # Build singularity command as a list to avoid shell-quoting headaches.
     cmd_args = [
         "singularity", "exec",
+        "--contain",             # Isolate /tmp, $HOME, /dev etc for each bot today
         "--writable-tmpfs",
-        "--bind", f"{hmc_dir}:/opt/hmc",
-        "--bind", f"{bot_run_dir}:/opt/hmc/run",
+        "--bind", f"{bot_run_dir}:/home/ad.msoe.edu/edex", # Private home for logs/config today
+        "--bind", f"{repo_root}:/home/ad.msoe.edu/edex/Cambium/Cambium:ro", # Mount the code today
+        "--bind", "/home/ad.msoe.edu/edex/.minecraft/libraries:/home/ad.msoe.edu/edex/.minecraft/libraries:ro", # Shared RO
+        "--bind", "/home/ad.msoe.edu/edex/.minecraft/assets:/home/ad.msoe.edu/edex/.minecraft/assets:ro",       # Shared RO
+        "--bind", "/home/ad.msoe.edu/edex/.minecraft/versions:/home/ad.msoe.edu/edex/.minecraft/versions:ro",   # Shared RO
+        "--bind", f"{mods_dir}:/opt/hmc/run/mods:ro", # Shared RO mods source today
+        "--bind", f"{hmc_dir}:/opt/hmc:ro",
         "--env", f"USERNAME={username}",
         "--env", f"SERVER={server}",
         "--env", f"HMC_VERSION={hmc_version}",
@@ -109,15 +125,25 @@ def main():
 
         print("[launcher] Waiting for connection to establish...")
         sys.stdout.flush()
-        time.sleep(15)
+        time.sleep(20)
 
         print("[launcher] Sending chat message...")
         sys.stdout.flush()
-        time.sleep(2)
-        child.sendline("say Hello, world!")
+        time.sleep(5)
+        child.sendline('msg "Hello, world!"')
         child.sendline("gui")
-        print("[launcher] Sent: say Hello, world!")
-        sys.stdout.flush()
+        
+        if username == "Bot1":
+            print("[launcher] Bot1 waiting 150s for all other bots to join before auto-config...")
+            sys.stdout.flush()
+            time.sleep(150)
+            child.sendline('msg "&bot-setup"')
+            time.sleep(2)
+            child.sendline('msg "&setup"')
+            time.sleep(2)
+            child.sendline('msg "&run"')
+            print("[launcher] Sent auto-config commands")
+            sys.stdout.flush()
     else:
         print("[launcher] No SERVER set, skipping connection")
         sys.stdout.flush()
@@ -139,11 +165,16 @@ def main():
 
             if idx == 0:
                 print("\n[launcher] === DISCONNECTED from server ===")
-                print("[launcher] Waiting 15s before checking server...")
+                # Wait long enough for cleanup to kill everything and for the
+                # new MC server to start. If we reconnect too early we race
+                # with Bot1's setup commands and land in an unconfigured world.
+                print("[launcher] Waiting 60s before attempting reconnect (allows server restart)...")
                 sys.stdout.flush()
-                time.sleep(15)
+                time.sleep(60)
 
-                while True:
+                # Ping until server is back, but give up after 5 minutes
+                deadline = time.time() + 300
+                while time.time() < deadline:
                     print(f"[launcher] Checking {mc_host}:{mc_port}...")
                     sys.stdout.flush()
                     ret = subprocess.run(
@@ -152,21 +183,35 @@ def main():
                     )
                     if ret.returncode == 0:
                         break
-                    print("[launcher] Server not available, retrying in 10s...")
+                    print("[launcher] Server not available, retrying in 15s...")
                     sys.stdout.flush()
-                    time.sleep(10)
+                    time.sleep(15)
+                else:
+                    print("[launcher] Server did not return within 5 minutes. Exiting.")
+                    sys.stdout.flush()
+                    return
 
-                print("[launcher] Server is back! Waiting 20s for full startup...")
+                print("[launcher] Server is back! Waiting 30s for full startup + other bots...")
                 sys.stdout.flush()
-                time.sleep(20)
+                time.sleep(30)
 
                 child.sendline(f"connect {mc_host} {mc_port}")
                 print("[launcher] Reconnect command sent.")
                 sys.stdout.flush()
                 time.sleep(15)
-                child.sendline("say I'm back!")
-                print("[launcher] Reconnection complete.")
-                sys.stdout.flush()
+                child.sendline('msg "I\'m back!"')
+                
+                if username == "Bot1":
+                    print("[launcher] Bot1 waiting 150s for other bots to reconnect...")
+                    sys.stdout.flush()
+                    time.sleep(150)
+                    child.sendline('msg "&bot-setup"')
+                    time.sleep(2)
+                    child.sendline('msg "&setup"')
+                    time.sleep(2)
+                    child.sendline('msg "&run"')
+                    print("[launcher] Reconnection auto-config complete.")
+                    sys.stdout.flush()
 
             else:
                 print("\n[launcher] HeadlessMC exited.")

@@ -10,7 +10,7 @@
 #   REPO_ROOT=$(pwd) NUM_BOTS=6 sbatch rosie/cambium.sbatch
 ################################################################################
 
-#SBATCH --job-name=cambium-rl
+#SBATCH --job-name=cambium-${CAMBIUM_RUN_TAG:-rl}
 #SBATCH --partition=teaching
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:t4:1
@@ -59,6 +59,9 @@ echo "  Cambium RL Training - Job $SLURM_JOB_ID"
 echo "============================================="
 echo "  Node:       $NODE_HOSTNAME"
 echo "  Bots:       $NUM_BOTS"
+echo "  Run tag:    ${CAMBIUM_RUN_TAG:-default}"
+echo "  Seed:       ${CAMBIUM_SEED:-0}"
+echo "  Mode:       ${CAMBIUM_REWARD_MODE:-shaped} | no_timeout=${CAMBIUM_NO_TIMEOUT:-0} | flat=${CAMBIUM_FLAT_ACTION:-0}"
 echo "  GPU:        $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A')"
 echo "  Start time: $(date)"
 echo "============================================="
@@ -103,24 +106,72 @@ fi
 PIDS=()
 cleanup() {
     echo ""
-    echo "[CLEANUP] Shutting down all processes..."
+    echo "[CLEANUP] Shutting down session processes..."
+    # 1. Send SIGTERM to all tracked PIDs
     for pid in "${PIDS[@]}"; do
         if kill -0 "$pid" 2>/dev/null; then
             echo "  Stopping PID $pid"
             kill "$pid" 2>/dev/null || true
         fi
     done
+    # 2. Short wait for graceful exit
+    sleep 5
+    # 3. Force kill (-9) any survivors
+    for pid in "${PIDS[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "  Force-killing PID $pid (-9)"
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
+    # 4. Kill any leftover bot-launcher or singularity processes from THIS job
+    #    so they don't auto-reconnect and race with the next MC server startup.
+    pkill -9 -u "$USER" -f "rosie-bot-launcher.py" 2>/dev/null || true
+    pkill -9 -u "$USER" -f "java8-base.sif" 2>/dev/null || true
+    pkill -9 -u "$USER" -f "minecraft-server-java8" 2>/dev/null || true
+    pkill -9 -u "$USER" -f "forge.*\.jar" 2>/dev/null || true
+    pkill -9 -u "$USER" -f "net.minecraft" 2>/dev/null || true
+
+    # 5. Wait for ALL ports to be released before returning
+    echo "  Ensuring ports are released..."
+    for port_to_check in "$BACKEND_PORT" "$MC_PORT" "$RCON_PORT"; do
+        while nc -z localhost "$port_to_check" 2>/dev/null; do
+            echo "  Port $port_to_check still bound, waiting..."
+            sleep 5
+            fuser -k "$port_to_check/tcp" 2>/dev/null || true
+        done
+    done
+    echo "  Ports are free."
+    sleep 5
     wait 2>/dev/null || true
+    # 6. Clean up this job's working directory
+    if [ -n "${WORK_DIR:-}" ] && [ -d "${WORK_DIR:-}" ]; then
+        echo "  Skipping workdir removal to persist world changes: $WORK_DIR"
+        # rm -rf "$WORK_DIR" || true
+    fi
     echo "[CLEANUP] Done."
 }
 trap cleanup EXIT INT TERM
+
+MAX_RESTARTS=20
+RESTART_COUNT=0
+
+while [ $RESTART_COUNT -lt $MAX_RESTARTS ]; do
+    echo ""
+    IT=$((RESTART_COUNT + 1))
+    echo "============================================="
+    echo "  Starting Run Loop iteration: $IT / $MAX_RESTARTS"
+    echo "============================================="
+    PIDS=()
 
 # ================================================================
 #  1. Start Minecraft Server
 # ================================================================
 echo "[1/$((NUM_BOTS + 2))] Starting Minecraft server..."
 
-MC_DATA_DIR="$REPO_ROOT/rosie/mc-data"
+# Use job-specific data directories to avoid collisions in parallel runs.
+# These will be cleaned up on exit if chosen, but keeping them aids debugging.
+WORK_DIR="$REPO_ROOT/rosie/workdirs/${SLURM_JOB_ID}"
+MC_DATA_DIR="$WORK_DIR/mc-data"
 mkdir -p "$MC_DATA_DIR"
 
 # Copy server data (world, properties, etc.) if not already present
@@ -128,6 +179,10 @@ if [ ! -f "$MC_DATA_DIR/server.properties" ]; then
     echo "  Copying server data from $SERVER_DIR..."
     cp -r "$SERVER_DIR"/* "$MC_DATA_DIR/" 2>/dev/null || true
 fi
+
+# Log filenames include iteration ID to prevent overwriting during auto-restarts
+MC_LOG="$RUN_DIR/mc-server_it${IT}.log"
+BACKEND_LOG="$RUN_DIR/backend_it${IT}.log"
 
 singularity exec \
     --bind "$MC_DATA_DIR:/data" \
@@ -140,18 +195,17 @@ singularity exec \
     --env RCON_PORT="$RCON_PORT" \
     --env RCON_PASSWORD=minecraft \
     "$IMAGES_DIR/minecraft-server-java8.sif" \
-    /start > "$RUN_DIR/mc-server.log" 2>&1 &
+    /start > "$MC_LOG" 2>&1 &
 MC_PID=$!
 PIDS+=("$MC_PID")
-
 echo "  MC server PID: $MC_PID"
 echo "  Waiting for MC server to be ready on port $MC_PORT..."
 
-TIMEOUT=180
+TIMEOUT=300 # Increased to 5 minutes for high-load node stability
 ELAPSED=0
 while ! nc -z localhost "$MC_PORT" 2>/dev/null; do
     if ! kill -0 "$MC_PID" 2>/dev/null; then
-        echo "  ERROR: MC server process died. Check $RUN_DIR/mc-server.log"
+        echo "  ERROR: MC server process died. Check $MC_LOG"
         exit 1
     fi
     sleep 5
@@ -175,20 +229,30 @@ RCON_HOST=localhost \
 RCON_PORT=$RCON_PORT \
 RCON_PASSWORD=minecraft \
 CAMBIUM_DEVICE=cuda \
+CAMBIUM_RUN_TAG="${CAMBIUM_RUN_TAG:-}" \
+CAMBIUM_SEED="${CAMBIUM_SEED:-0}" \
+CAMBIUM_NO_TRAIN="${CAMBIUM_NO_TRAIN:-0}" \
+CAMBIUM_REWARD_MODE="${CAMBIUM_REWARD_MODE:-shaped}" \
+CAMBIUM_NO_TIMEOUT="${CAMBIUM_NO_TIMEOUT:-0}" \
+CAMBIUM_FLAT_ACTION="${CAMBIUM_FLAT_ACTION:-0}" \
+CAMBIUM_SELF_PLAY="${CAMBIUM_SELF_PLAY:-1}" \
+CAMBIUM_MAX_INTERVALS="${CAMBIUM_MAX_INTERVALS:-0}" \
+CAMBIUM_RESTART_HOURS="${CAMBIUM_RESTART_HOURS:-2.0}" \
+CAMBIUM_EVAL_OPPONENT="${CAMBIUM_EVAL_OPPONENT:-}" \
+CAMBIUM_FORCE_FRESH="${CAMBIUM_FORCE_FRESH:-0}" \
     python -m uvicorn main:app --host 0.0.0.0 --port "$BACKEND_PORT" \
     --app-dir "$REPO_ROOT/backend" \
     --no-access-log \
-    > "$RUN_DIR/backend.log" 2>&1 &
+    > "$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 PIDS+=("$BACKEND_PID")
-
 echo "  Backend PID: $BACKEND_PID"
 echo "  Waiting for backend on port $BACKEND_PORT..."
 
 ELAPSED=0
 while ! nc -z localhost "$BACKEND_PORT" 2>/dev/null; do
     if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
-        echo "  ERROR: Backend process died. Check $RUN_DIR/backend.log"
+        echo "  ERROR: Backend process died. Check $BACKEND_LOG"
         exit 1
     fi
     sleep 2
@@ -211,7 +275,7 @@ for i in $(seq 1 "$NUM_BOTS"); do
     STEP=$((i + 2))
     echo "[$STEP/$((NUM_BOTS + 2))] Starting headless client: $BOT_NAME..."
 
-    BOT_RUN_DIR="$REPO_ROOT/rosie/bot-data/${BOT_NAME}"
+    BOT_RUN_DIR="$WORK_DIR/bot-data/${BOT_NAME}_it${IT}"
     mkdir -p "$BOT_RUN_DIR/mods"
 
     # Copy mods so the entrypoint can stage them into ~/.minecraft/mods
@@ -227,7 +291,7 @@ for i in $(seq 1 "$NUM_BOTS"); do
     MC_VERSION="1.8.9" \
     CAMBIUM_API_URL="$API_URL" \
         python "$REPO_ROOT/rosie/rosie-bot-launcher.py" \
-        > "$RUN_DIR/${BOT_NAME}.log" 2>&1 &
+        >> "$RUN_DIR/${BOT_NAME}.log" 2>&1 &
     BOT_PID=$!
     PIDS+=("$BOT_PID")
     echo "  $BOT_NAME PID: $BOT_PID"
@@ -258,4 +322,10 @@ echo "============================================="
 
 # Wait for all background processes -- job stays alive until SLURM kills it
 # or all processes exit
-wait
+wait $BACKEND_PID || true
+    echo "[RESTART] Backend exited (likely 100-interval auto-restart). Cleaning up..."
+    cleanup
+    RESTART_COUNT=$((RESTART_COUNT + 1))
+    echo "Sleeping 5s before next iteration..."
+    sleep 5
+done

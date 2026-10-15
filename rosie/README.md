@@ -39,11 +39,11 @@ ls headlessmc/mods/CambiumMod-1.0.jar   # Verify it exists
 #    This takes ~10-15 minutes the first time
 bash rosie/setup.sh
 
-# 4. Submit the training job (default: 4 bots)
-sbatch rosie/cambium.sbatch
+# 4. Submit the training job (default: 8 bots)
+REPO_ROOT=$(pwd) sbatch rosie/cambium.sbatch
 
 # Or with a custom number of bots:
-NUM_BOTS=6 sbatch rosie/cambium.sbatch
+REPO_ROOT=$(pwd) NUM_BOTS=6 sbatch rosie/cambium.sbatch
 
 # 5. Check job status
 squeue -u $USER
