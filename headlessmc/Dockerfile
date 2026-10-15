@@ -68,7 +68,7 @@ RUN find /opt/hmc/HeadlessMC -name 'liblwjgl*.so' -exec execstack -c {} \;
 
 # Create the vanilla Minecraft mods folder under root (for compatibility)
 RUN mkdir -p $HOME/.minecraft/mods
-
+# test
 
 # Copy entrypoint first (changes less frequently)
 COPY entrypoint.sh /opt/hmc/entrypoint.sh
